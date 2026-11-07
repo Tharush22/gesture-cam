@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Gesture Cam photo test</title>
+<script type="module">
+// Runs the real hand tracker on the photos in test/images and classifies each hand.
+// Opened by test/photos.mjs; also handy to open by hand while tuning thresholds.
+import factory from "../extension/vendor/mediapipe/vision_wasm_module_internal.js";
+import { HandLandmarker } from "../extension/vendor/mediapipe/vision_bundle.mjs";
+import { classify, measure } from "../extension/content/gestures.js";
+
+const PHOTOS = ["thumb_up", "pointing_up", "pointing_up_rotated", "victory", "fist", "right_hands"];
+
+globalThis.ModuleFactory = factory;
+const hands = await HandLandmarker.createFromOptions(
+  { wasmLoaderPath: "", wasmBinaryPath: "../extension/vendor/mediapipe/vision_wasm_module_internal.wasm" },
+  { baseOptions: { modelAssetPath: "../extension/models/hand_landmarker.task", delegate: "CPU" }, runningMode: "IMAGE", numHands: 2 },
+);
+
+const results = {};
+for (const name of PHOTOS) {
+  const img = new Image();
+  img.src = `images/${name}.jpg`;
+  await img.decode();
+  const found = hands.detect(img).landmarks;
+  results[name] = found.map((lm) => {
+    const m = measure(lm, img.naturalWidth, img.naturalHeight);
+    return {
+      gesture: classify(lm, img.naturalWidth, img.naturalHeight)?.name ?? null,
+      fingers: Object.fromEntries(Object.entries(m.fingers).map(([k, f]) => [k, f.extended ? "out" : f.curled ? "curled" : "?"])),
+      thumb: { out: m.thumbOut, straight: +m.thumbStraight.toFixed(2), gap: +m.thumbGap.toFixed(2), dirY: +m.thumbDir[1].toFixed(2) },
+      handDirY: +m.handDir[1].toFixed(2),
+    };
+  });
+}
+window.results = results;
+document.body.textContent = JSON.stringify(results, null, 1);
+</script>
