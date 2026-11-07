@@ -68,3 +68,7 @@ npm run test:e2e
 ## Credits
 
 Hand tracking uses Google's [MediaPipe](https://ai.google.dev/edge/mediapipe) (Apache License 2.0), bundled in `extension/vendor/mediapipe/` and `extension/models/`. The test photos come from MediaPipe's test assets.
+
+## License
+
+[MIT](LICENSE) © 2026 Tharush22. The bundled MediaPipe files keep their own Apache 2.0 license.
