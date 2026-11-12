@@ -11,6 +11,11 @@ const EXPECT = {
   victory: ["peace"],
   fist: [null],
   right_hands: ["openPalm", null],
+  // Real hands moved in 3D, for poses there's no photo of (see photos.html).
+  "open hand tilted flat": ["flatHand"],
+  "open hand tilted flat the other way": ["flatHand"],
+  "open hand turned sideways": [null],
+  "middle finger instead of index": ["middlePoint"],
 };
 
 const server = await serve();

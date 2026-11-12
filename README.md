@@ -8,13 +8,16 @@ Hand-gesture effects for your webcam in browser video calls. Everyone else in th
 | ✋ Open palm, held upright | Privacy mode: pixelates the picture. Do it again to turn it off. |
 | 👉 Finger gun (index out, thumb up) | Muzzle flash, "BANG!", screen shake and smoke |
 | ✌️ Peace sign | **Fog mirror**: the picture steams up like a bathroom mirror. Do it again to clear it. |
+| 🤚 Hand laid flat (palm up or down) | **Rasengan**: a spinning ball of wind and light hovers above your hand for as long as you hold it |
 
 While the fog mirror is on, you can write on it:
 
 | Gesture | What it does |
 |---|---|
-| Only your ring finger out | Draws: wipes a clear line through the fog |
-| Only your index finger out (thumb tucked in) | Erases: rubs fog back over your lines |
+| Only your index finger out | Draws: wipes a clear line through the fog |
+| Only your middle finger out | Erases: rubs fog back over your lines |
+
+The fingertip is smoothed (a "1€ filter", in `content/smoothing.js`) and lines are drawn as curves, so they come out steady even when hand tracking is slow. While the fog is on, the finger gun is switched off, so your thumb drifting out doesn't fire a bang mid-line.
 
 Lines slowly mist over again in about 15 seconds, like a real mirror. Your self-view is mirrored, so writing looks right to you, but the others in the call see text reversed, the way it would look from behind real glass.
 

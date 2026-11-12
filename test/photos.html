@@ -29,8 +29,48 @@ for (const name of PHOTOS) {
       fingers: Object.fromEntries(Object.entries(m.fingers).map(([k, f]) => [k, f.extended ? "out" : f.curled ? "curled" : "?"])),
       thumb: { out: m.thumbOut, straight: +m.thumbStraight.toFixed(2), gap: +m.thumbGap.toFixed(2), dirY: +m.thumbDir[1].toFixed(2) },
       handDirY: +m.handDir[1].toFixed(2),
+      palmFacingY: +m.palmFacing[1].toFixed(2),  // near ±1 means the hand lies flat
     };
   });
+}
+// Made-up variants of real hands, for poses no photo shows. Each is a real hand moved in 3D.
+const W = {}, H = {};  // photo sizes, to turn normalized points into pixels and back
+for (const name of PHOTOS) { const i = new Image(); i.src = `images/${name}.jpg`; await i.decode(); W[name] = i.naturalWidth; H[name] = i.naturalHeight; }
+const handFrom = async (photo, gesture) => {
+  const img = new Image(); img.src = `images/${photo}.jpg`; await img.decode();
+  return hands.detect(img).landmarks.find((lm) => classify(lm, W[photo], H[photo])?.name === gesture);
+};
+// Rotate a hand about its wrist. axis "x" tips it forward/back; "z" turns it in the picture's plane.
+const rotate = (lm, photo, axis, degrees) => {
+  const w = W[photo], h = H[photo], a = (degrees * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  const o = [lm[0].x * w, lm[0].y * h, lm[0].z * w];
+  return lm.map((q) => {
+    let [x, y, z] = [q.x * w - o[0], q.y * h - o[1], q.z * w - o[2]];
+    if (axis === "x") [y, z] = [y * c - z * s, y * s + z * c];
+    else [x, y] = [x * c - y * s, x * s + y * c];
+    return { x: (x + o[0]) / w, y: (y + o[1]) / h, z: (z + o[2]) / w };
+  });
+};
+// Swap two fingers' shapes, keeping each on its own knuckle.
+const swapFingers = (lm, a, b) => {
+  const out = lm.map((q) => ({ ...q }));
+  for (let j = 1; j < 4; j++) {
+    for (const [from, to] of [[a, b], [b, a]]) {
+      out[to + j] = { x: lm[from + j].x - lm[from].x + lm[to].x, y: lm[from + j].y - lm[from].y + lm[to].y, z: lm[from + j].z - lm[from].z + lm[to].z };
+    }
+  }
+  return out;
+};
+const palm = await handFrom("right_hands", "openPalm");
+const pointing = await handFrom("pointing_up", "indexPoint");
+const variants = {
+  "open hand tilted flat": ["right_hands", rotate(palm, "right_hands", "x", 80)],
+  "open hand tilted flat the other way": ["right_hands", rotate(palm, "right_hands", "x", -80)],
+  "open hand turned sideways": ["right_hands", rotate(palm, "right_hands", "z", 90)],
+  "middle finger instead of index": ["pointing_up", swapFingers(pointing, 5, 9)],
+};
+for (const [name, [photo, lm]] of Object.entries(variants)) {
+  results[name] = [{ gesture: classify(lm, W[photo], H[photo])?.name ?? null, palmFacingY: +measure(lm, W[photo], H[photo]).palmFacing[1].toFixed(2) }];
 }
 window.results = results;
 document.body.textContent = JSON.stringify(results, null, 1);

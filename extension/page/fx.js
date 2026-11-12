@@ -1,5 +1,5 @@
 // The effects engine. It draws on top of each camera frame with a plain 2D canvas: confetti, the
-// privacy blur, the finger-gun bang, and the fog mirror you can draw on.
+// privacy blur, the finger-gun bang, the fog mirror you can draw on, and the Rasengan.
 //
 // This file runs in the meeting page's own JavaScript world (see manifest.json), next to
 // page/camera.js, because that is where the camera frames are. The hand tracking runs in the
@@ -232,8 +232,8 @@
   //
   // The fog is a copy of the picture, blurred and whitened, laid over the clear one. A "mask" canvas
   // says how thick the fog is at each spot: opaque is full fog, transparent is clear glass.
-  //   - Drawing (ring finger) cuts lines out of the mask.
-  //   - Erasing (index finger) paints the mask back in.
+  //   - Drawing (index finger) cuts lines out of the mask.
+  //   - Erasing (middle finger) paints the mask back in.
   //   - Every quarter second a thin coat is painted over the whole mask, so lines slowly mist over.
   // The mask keeps its contents between frames; that's what lets a drawing build up stroke by stroke.
 
@@ -244,7 +244,7 @@
   // A stroke ends when the finger stops pointing (the extension sends a "pen lifted"). This gap is
   // only a backstop, and generous: on a slow computer fingertip updates can be 0.3 s apart or more.
   const PEN_GAP = 1.0;
-  const PEN_SMOOTHING = 0.5; // 0 = raw fingertip (shaky), closer to 1 = smoother but laggier
+  // (The fingertip arrives already smoothed: see content/smoothing.js.)
 
   const fog = { on: false, at: -1e9, from: 0, pen: null, refogAt: 0 };
   const mask = { canvas: null, ctx: null };
@@ -280,35 +280,45 @@
   /** The pen moved: mode "draw" (clear a line), "erase" (fog it back), or null (pen lifted). */
   function fogPen(mode, x, y) {
     const t = clock();
+    const pen = fog.pen;
     if (!mode || !fog.on || !mask.canvas) {
+      if (pen?.prev && mask.canvas) penStroke(pen.mode, (m) => { m.moveTo(...mid(pen.prev, pen.last)); m.lineTo(...pen.last); });
       fog.pen = null;
       return;
     }
-    const m = mask.ctx, mh = mask.canvas.height;
-    let px = x * mask.canvas.width, py = y * mh;
-    const last = fog.pen;
-    const joined = last && last.mode === mode && t - last.t < PEN_GAP;
-    if (joined) {
-      // Fingertip tracking jitters a little; blend with the last point to smooth the line.
-      px = last.x + (px - last.x) * (1 - PEN_SMOOTHING);
-      py = last.y + (py - last.y) * (1 - PEN_SMOOTHING);
+    const point = [x * mask.canvas.width, y * mask.canvas.height];
+    const joined = pen && pen.mode === mode && t - pen.t < PEN_GAP;
+    if (!joined) {
+      // First touch of a stroke: a single dot.
+      // (A zero-length line can be skipped when stroking, so nudge the end a hair.)
+      penStroke(mode, (m) => { m.moveTo(...point); m.lineTo(point[0] + 0.01, point[1]); });
+      fog.pen = { mode, prev: null, last: point, t };
+      return;
     }
+    // Curve through the points instead of joining them with straight lines: each piece runs from
+    // the middle of one gap to the middle of the next, bending through the point in between.
+    const { prev, last } = pen;
+    penStroke(mode, (m) => {
+      m.moveTo(...(prev ? mid(prev, last) : last));
+      m.quadraticCurveTo(...last, ...mid(last, point));
+    });
+    fog.pen = { mode, prev: last, last: point, t };
+  }
+
+  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+
+  /** Strokes a path on the mask: "draw" cuts it out of the fog, "erase" paints fog back. */
+  function penStroke(mode, path) {
+    const m = mask.ctx;
     m.save();
     m.globalCompositeOperation = mode === "draw" ? "destination-out" : "source-over";
-    m.strokeStyle = m.fillStyle = "#fff";
-    m.lineWidth = (mode === "draw" ? PEN_WIDTH : ERASER_WIDTH) * mh;
+    m.strokeStyle = "#fff";
+    m.lineWidth = (mode === "draw" ? PEN_WIDTH : ERASER_WIDTH) * mask.canvas.height;
     m.lineCap = m.lineJoin = "round";
     m.beginPath();
-    if (joined) {
-      m.moveTo(last.x, last.y);
-      m.lineTo(px, py);
-      m.stroke();
-    } else {
-      m.arc(px, py, m.lineWidth / 2, 0, Math.PI * 2);
-      m.fill();
-    }
+    path(m);
+    m.stroke();
     m.restore();
-    fog.pen = { mode, x: px, y: py, t };
   }
 
   function makeCondensation() {
@@ -362,6 +372,114 @@
     ctx.drawImage(layer.canvas, 0, 0, w, h);
   }
 
+  // ------------------------------------------------------------------ Rasengan
+  //
+  // A ball of spinning wind and light that hovers above your hand: a glowing core, streaks of wind
+  // whirling around it at different tilts (which makes it look round), a ring of wind outside and
+  // sparks in orbit. The extension sends your hand's position several times a second; between
+  // updates the orb glides toward the newest one, so it moves smoothly even though hand tracking is
+  // choppier than the video. When the updates stop, it shrinks away.
+
+  const ORB_GROW = 0.35, ORB_SHRINK = 0.3;  // seconds
+  const ORB_HOLD = 0.6;    // keep it up this long after the last update (tracking can be slow)
+  const ORB_FOLLOW = 14;   // how fast it glides to your hand: higher is snappier, lower is floatier
+
+  const orb = { x: 0.5, y: 0.5, size: 0.2, target: null, shownAt: -1e9, until: -1e9, lastT: 0, arcs: null, sparks: null };
+
+  function orbAmount(t) {
+    const grow = easeOut(clamp01((t - orb.shownAt) / ORB_GROW));
+    const shrink = 1 - clamp01((t - orb.until) / ORB_SHRINK);
+    return grow * shrink;
+  }
+
+  /** Where your hand is now: x, y (0..1 of the picture) and size (fraction of its height). */
+  function orbUpdate(x, y, size, hold = ORB_HOLD) {
+    const t = clock();
+    if (orbAmount(t) <= 0) {  // appearing: start right at the hand, not gliding in from the last spot
+      Object.assign(orb, { x, y, size, shownAt: t, lastT: t });
+    }
+    orb.target = { x, y, size };
+    orb.until = t + hold;
+  }
+
+  function makeOrbParts() {
+    orb.arcs = Array.from({ length: 16 }, () => ({
+      r: rand(0.35, 1), tilt: rand(0, Math.PI), squash: rand(0.25, 1), spin: rand(7, 15),
+      start: rand(0, Math.PI * 2), len: rand(0.8, 2.2), width: rand(0.025, 0.07), alpha: rand(0.35, 0.85),
+    }));
+    orb.sparks = Array.from({ length: 24 }, () => ({
+      r: rand(0.9, 1.5), speed: rand(3, 8), phase: rand(0, Math.PI * 2), tilt: rand(0, Math.PI), size: rand(0.02, 0.05),
+    }));
+  }
+
+  function drawOrb(ctx, amount, t, h) {
+    const w = ctx.canvas.width;
+    // Glide toward the hand. (Several camera streams can draw in the same instant: dt is then 0.)
+    const dt = Math.min(0.1, Math.max(0, t - orb.lastT));
+    orb.lastT = t;
+    if (orb.target) {
+      const k = 1 - Math.exp(-ORB_FOLLOW * dt);
+      orb.x += (orb.target.x - orb.x) * k;
+      orb.y += (orb.target.y - orb.y) * k;
+      orb.size += (orb.target.size - orb.size) * k;
+    }
+    if (!orb.arcs) makeOrbParts();
+
+    const cx = orb.x * w, cy = orb.y * h;
+    const R = orb.size * h * 0.55 * (0.3 + 0.7 * amount) * (1 + 0.03 * Math.sin(t * 37));  // a slight crackle
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";  // light adds up, so overlapping streaks glow brighter
+    ctx.globalAlpha = Math.min(1, amount * 1.2);
+
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 2.4);
+    glow.addColorStop(0, "rgba(70,160,255,0.45)");
+    glow.addColorStop(0.4, "rgba(40,120,255,0.18)");
+    glow.addColorStop(1, "rgba(40,120,255,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(cx - R * 2.4, cy - R * 2.4, R * 4.8, R * 4.8);
+
+    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+    core.addColorStop(0, "rgba(255,255,255,0.95)");
+    core.addColorStop(0.35, "rgba(190,235,255,0.85)");
+    core.addColorStop(0.75, "rgba(70,160,255,0.45)");
+    core.addColorStop(1, "rgba(40,110,255,0)");
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.lineCap = "round";
+    for (const a of orb.arcs) {
+      const from = a.start + a.spin * t;
+      ctx.strokeStyle = `rgba(210,240,255,${a.alpha})`;
+      ctx.lineWidth = a.width * R;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, a.r * R, a.r * R * a.squash, a.tilt, from, from + a.len);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "rgba(160,215,255,0.5)";
+    ctx.lineWidth = R * 0.05;
+    for (let k = 0; k < 3; k++) {
+      const from = -t * 9 + k * 2.1;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, R * 1.35, R * 0.42, -0.2, from, from + 1.3);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(220,245,255,0.9)";
+    for (const s of orb.sparks) {
+      const angle = s.phase + s.speed * t;
+      const ex = Math.cos(angle) * s.r * R, ey = Math.sin(angle) * s.r * R * 0.45;
+      const x = cx + ex * Math.cos(s.tilt) - ey * Math.sin(s.tilt);
+      const y = cy + ex * Math.sin(s.tilt) + ey * Math.cos(s.tilt);
+      ctx.beginPath();
+      ctx.arc(x, y, s.size * R, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   // ------------------------------------------------------------------ every frame
 
   /**
@@ -375,7 +493,8 @@
     const shakeAge = t - state.shakeAt;
     const shaking = shakeAge < SHAKE_SECONDS;
     const fogged = fogAmount(t);
-    const busy = privacy > 0.001 || fogged > 0.001 || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
+    const orbShown = orbAmount(t);
+    const busy = privacy > 0.001 || fogged > 0.001 || orbShown > 0 || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
     if (!busy) return frame;
 
     const w = frame.displayWidth, h = frame.displayHeight;
@@ -408,6 +527,7 @@
     if (fogged > 0.001) drawFog(ctx, fogged, t, w, h);
     drawSmoke(ctx, t, w, h);
     drawConfetti(ctx, t, w, h);
+    if (orbShown > 0) drawOrb(ctx, orbShown, t, h);
     drawBangs(ctx, t, w, h);
 
     const flashAge = shakeAge;  // the white flash starts with the shot
@@ -424,13 +544,14 @@
     });
   }
 
-  /** A command from the extension: { name: "confetti" | "bang" | "privacy" | "fog" | "fogPen", ... }. */
+  /** A command from the extension: { name: "confetti" | "bang" | "privacy" | "fog" | "fogPen" | "orb", ... }. */
   function run(cmd) {
     if (cmd.name === "confetti") confetti(cmd.x, cmd.y);
     else if (cmd.name === "bang") bang(cmd.x, cmd.y, cmd.dx, cmd.dy);
     else if (cmd.name === "privacy") privacy(!!cmd.on);
     else if (cmd.name === "fog") setFog(!!cmd.on);
     else if (cmd.name === "fogPen") fogPen(cmd.mode, cmd.x, cmd.y);
+    else if (cmd.name === "orb") orbUpdate(cmd.x, cmd.y, cmd.size, cmd.hold);
   }
 
   app.fx = { render, run };

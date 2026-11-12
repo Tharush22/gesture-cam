@@ -43,6 +43,7 @@ export const EFFECTS = [
   { key: "privacy", title: "Privacy blur", how: "Open palm (toggles)", gesture: "openPalm" },
   { key: "bang", title: "Bang!", how: "Finger gun", gesture: "fingerGun" },
   { key: "fog", title: "Fog mirror", how: "Peace sign (toggles)", gesture: "peace" },
+  { key: "orb", title: "Rasengan", how: "Hand laid flat", gesture: "flatHand" },
 ];
 
 export class Panel {

@@ -1,5 +1,6 @@
 // Turns MediaPipe's 21 hand points into gestures: thumbs up, open palm, finger gun, peace sign,
-// and pointing with just the ring or just the index finger (the fog mirror's pen and eraser).
+// a hand laid flat (the Rasengan), and pointing with just the index or just the middle finger
+// (the fog mirror's pen and eraser).
 //
 // Hand points (https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker):
 //   0 wrist; thumb 1-4; index 5-8; middle 9-12; ring 13-16; pinky 17-20 (knuckle first, tip last).
@@ -12,6 +13,7 @@ const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const len = (v) => Math.hypot(v[0], v[1], v[2]);
 const dist = (a, b) => len(sub(a, b));
 const cosine = (a, b) => (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (len(a) * len(b) + 1e-9);
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
 /** Measures every finger. Exported for tests and for the debug readout. */
 export function measure(landmarks, w, h) {
@@ -42,7 +44,13 @@ export function measure(landmarks, w, h) {
     return [dx / n, dy / n];
   };
 
-  return { p, fingers, thumbOut, thumbStraight, thumbGap, thumbDir: dir2(2, 4), handDir: dir2(0, 9), indexDir: dir2(5, 8) };
+  // Which way the palm faces: the line at right angles to the palm's surface (wrist, index knuckle,
+  // pinky knuckle). Its y part is near ±1 when the hand lies flat, palm up or down.
+  const normal = cross(sub(p[5], p[0]), sub(p[17], p[0]));
+  const palmFacing = normal.map((v) => v / (len(normal) + 1e-9));
+
+  return { p, palm, fingers, thumbOut, thumbStraight, thumbGap, palmFacing,
+    thumbDir: dir2(2, 4), handDir: dir2(0, 9), indexDir: dir2(5, 8) };
 }
 
 /**
@@ -54,6 +62,15 @@ export function classify(landmarks, w, h) {
   const m = measure(landmarks, w, h);
   const { index, middle, ring, pinky } = m.fingers;
   const at = (i) => ({ x: landmarks[i].x, y: landmarks[i].y });
+
+  // Hand laid flat (palm facing up or down), fingers not curled: the Rasengan sits above the palm.
+  if (Math.abs(m.palmFacing[1]) > 0.65 && !index.curled && !middle.curled && !ring.curled && !pinky.curled) {
+    const palmIds = [0, 5, 9, 13, 17];
+    const cx = palmIds.reduce((s, i) => s + landmarks[i].x, 0) / palmIds.length;
+    const cy = palmIds.reduce((s, i) => s + landmarks[i].y, 0) / palmIds.length;
+    const size = m.palm / h;  // hand size as a fraction of the picture's height
+    return { name: "flatHand", x: cx, y: cy - size * 0.9, size, dx: 0, dy: -1 };
+  }
 
   // Open palm: every finger and the thumb out, hand held upright.
   if (index.extended && middle.extended && ring.extended && pinky.extended && m.thumbOut && m.handDir[1] < -0.6) {
@@ -76,15 +93,15 @@ export function classify(landmarks, w, h) {
     return { name: "peace", ...at(12), dx: 0, dy: -1 };
   }
 
-  // Ring finger on its own: the fog mirror's pen. The others only need to be not straight,
-  // because few hands can curl them tightly while holding the ring finger out.
-  if (ring.extended && !index.extended && !middle.extended && !pinky.extended) {
-    return { name: "ringPoint", ...at(16), dx: 0, dy: -1 };
-  }
-
-  // Index finger on its own, thumb tucked in (thumb out would be the finger gun): the fog eraser.
+  // Index finger on its own, thumb tucked in (thumb out is the finger gun): the fog mirror's pen.
+  // The other fingers only need to be not straight, so a relaxed hand still counts.
   if (index.extended && !middle.extended && !ring.extended && !pinky.extended && !m.thumbOut) {
     return { name: "indexPoint", ...at(8), dx: m.indexDir[0], dy: m.indexDir[1] };
+  }
+
+  // Middle finger on its own: the fog mirror's eraser.
+  if (middle.extended && !index.extended && !ring.extended && !pinky.extended) {
+    return { name: "middlePoint", ...at(12), dx: 0, dy: -1 };
   }
 
   return null;

@@ -113,10 +113,10 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
   await context.close();
 }
 
-// 4. The Try buttons, including the finger gun (there's no finger-gun photo to test with).
+// 4. The Try buttons, including the finger gun and the Rasengan (no photos show those poses).
 {
   const { context, page } = await open("fist");
-  for (const key of ["bang", "confetti", "privacy"]) {
+  for (const key of ["bang", "confetti", "orb", "privacy"]) {
     await page.evaluate(() => window.snapshot());
     await page.locator(`gesture-cam-panel .effect[data-key="${key}"] .try`).click();
     const change = await watch(page, 3000);
