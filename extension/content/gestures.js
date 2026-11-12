@@ -1,4 +1,5 @@
-// Turns MediaPipe's 21 hand points into gestures: thumbs up, open palm, finger gun.
+// Turns MediaPipe's 21 hand points into gestures: thumbs up, open palm, finger gun, peace sign,
+// and pointing with just the ring or just the index finger (the fog mirror's pen and eraser).
 //
 // Hand points (https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker):
 //   0 wrist; thumb 1-4; index 5-8; middle 9-12; ring 13-16; pinky 17-20 (knuckle first, tip last).
@@ -68,6 +69,22 @@ export function classify(landmarks, w, h) {
   const thumbHighest = [8, 12, 16, 20].every((i) => m.p[4][1] < m.p[i][1]);
   if (index.curled && middle.curled && ring.curled && pinky.curled && m.thumbOut && m.thumbDir[1] < -0.6 && thumbHighest) {
     return { name: "thumbsUp", ...at(4), dx: m.thumbDir[0], dy: m.thumbDir[1] };
+  }
+
+  // Peace sign: index and middle fingers out, ring and pinky curled, thumb tucked in.
+  if (index.extended && middle.extended && ring.curled && pinky.curled && !m.thumbOut) {
+    return { name: "peace", ...at(12), dx: 0, dy: -1 };
+  }
+
+  // Ring finger on its own: the fog mirror's pen. The others only need to be not straight,
+  // because few hands can curl them tightly while holding the ring finger out.
+  if (ring.extended && !index.extended && !middle.extended && !pinky.extended) {
+    return { name: "ringPoint", ...at(16), dx: 0, dy: -1 };
+  }
+
+  // Index finger on its own, thumb tucked in (thumb out would be the finger gun): the fog eraser.
+  if (index.extended && !middle.extended && !ring.extended && !pinky.extended && !m.thumbOut) {
+    return { name: "indexPoint", ...at(8), dx: m.indexDir[0], dy: m.indexDir[1] };
   }
 
   return null;

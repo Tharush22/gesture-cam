@@ -6,9 +6,9 @@ import { serve } from "./serve.mjs";
 // What each photo should (and shouldn't) trigger. right_hands has two hands: one upright, one upside down.
 const EXPECT = {
   thumb_up: ["thumbsUp"],
-  pointing_up: [null],
-  pointing_up_rotated: [null],
-  victory: [null],
+  pointing_up: ["indexPoint"],          // the fog mirror's eraser
+  pointing_up_rotated: ["indexPoint"],
+  victory: ["peace"],
   fist: [null],
   right_hands: ["openPalm", null],
 };

@@ -1,4 +1,5 @@
-// The effects engine. It draws on top of each camera frame with a plain 2D canvas.
+// The effects engine. It draws on top of each camera frame with a plain 2D canvas: confetti, the
+// privacy blur, the finger-gun bang, and the fog mirror you can draw on.
 //
 // This file runs in the meeting page's own JavaScript world (see manifest.json), next to
 // page/camera.js, because that is where the camera frames are. The hand tracking runs in the
@@ -94,10 +95,10 @@
   const main = { canvas: null, ctx: null };
   const small = { canvas: null, ctx: null };
 
-  function context(slot, w, h) {
+  function context(slot, w, h, alpha = false) {
     if (!slot.canvas) {
       slot.canvas = new OffscreenCanvas(w, h);
-      slot.ctx = slot.canvas.getContext("2d", { alpha: false });
+      slot.ctx = slot.canvas.getContext("2d", { alpha });
     } else if (slot.canvas.width !== w || slot.canvas.height !== h) {
       slot.canvas.width = w;
       slot.canvas.height = h;
@@ -227,6 +228,142 @@
     ctx.restore();
   }
 
+  // ------------------------------------------------------------------ fog mirror
+  //
+  // The fog is a copy of the picture, blurred and whitened, laid over the clear one. A "mask" canvas
+  // says how thick the fog is at each spot: opaque is full fog, transparent is clear glass.
+  //   - Drawing (ring finger) cuts lines out of the mask.
+  //   - Erasing (index finger) paints the mask back in.
+  //   - Every quarter second a thin coat is painted over the whole mask, so lines slowly mist over.
+  // The mask keeps its contents between frames; that's what lets a drawing build up stroke by stroke.
+
+  const FOG_IN_SECONDS = 1.2, FOG_OUT_SECONDS = 0.8;
+  const REFOG_SECONDS = 5;   // lines are about 95% fogged over after three times this: ~15 s
+  const REFOG_STEP = 0.25;   // coats any thinner than this round away to nothing on an 8-bit mask
+  const PEN_WIDTH = 0.035, ERASER_WIDTH = 0.1;  // in frame heights
+  // A stroke ends when the finger stops pointing (the extension sends a "pen lifted"). This gap is
+  // only a backstop, and generous: on a slow computer fingertip updates can be 0.3 s apart or more.
+  const PEN_GAP = 1.0;
+  const PEN_SMOOTHING = 0.5; // 0 = raw fingertip (shaky), closer to 1 = smoother but laggier
+
+  const fog = { on: false, at: -1e9, from: 0, pen: null, refogAt: 0 };
+  const mask = { canvas: null, ctx: null };
+  const layer = { canvas: null, ctx: null };
+  let condensation = null;  // a tiled texture of tiny droplets, made once
+
+  function fogAmount(t) {
+    const k = easeOut(clamp01((t - fog.at) / (fog.on ? FOG_IN_SECONDS : FOG_OUT_SECONDS)));
+    return fog.on ? fog.from + (1 - fog.from) * k : fog.from * (1 - k);
+  }
+
+  function setFog(on) {
+    if (on === fog.on) return;
+    const t = clock();
+    fog.from = fogAmount(t);  // carry on from wherever a fade got to
+    if (on && fog.from < 0.01) mask.canvas = null;  // fresh fog: start from a clean, fully fogged mask
+    fog.on = on;
+    fog.at = t;
+    fog.pen = null;
+  }
+
+  /** Makes sure the mask exists at half the frame's size, fully fogged when new. */
+  function ensureMask(w, h, t) {
+    const mw = Math.max(1, Math.round(w / 2)), mh = Math.max(1, Math.round(h / 2));
+    if (mask.canvas && mask.canvas.width === mw && mask.canvas.height === mh) return;
+    mask.canvas = null;  // a different camera size can't keep the old drawing
+    const m = context(mask, mw, mh, true);
+    m.fillStyle = "#fff";
+    m.fillRect(0, 0, mw, mh);
+    fog.refogAt = t;
+  }
+
+  /** The pen moved: mode "draw" (clear a line), "erase" (fog it back), or null (pen lifted). */
+  function fogPen(mode, x, y) {
+    const t = clock();
+    if (!mode || !fog.on || !mask.canvas) {
+      fog.pen = null;
+      return;
+    }
+    const m = mask.ctx, mh = mask.canvas.height;
+    let px = x * mask.canvas.width, py = y * mh;
+    const last = fog.pen;
+    const joined = last && last.mode === mode && t - last.t < PEN_GAP;
+    if (joined) {
+      // Fingertip tracking jitters a little; blend with the last point to smooth the line.
+      px = last.x + (px - last.x) * (1 - PEN_SMOOTHING);
+      py = last.y + (py - last.y) * (1 - PEN_SMOOTHING);
+    }
+    m.save();
+    m.globalCompositeOperation = mode === "draw" ? "destination-out" : "source-over";
+    m.strokeStyle = m.fillStyle = "#fff";
+    m.lineWidth = (mode === "draw" ? PEN_WIDTH : ERASER_WIDTH) * mh;
+    m.lineCap = m.lineJoin = "round";
+    m.beginPath();
+    if (joined) {
+      m.moveTo(last.x, last.y);
+      m.lineTo(px, py);
+      m.stroke();
+    } else {
+      m.arc(px, py, m.lineWidth / 2, 0, Math.PI * 2);
+      m.fill();
+    }
+    m.restore();
+    fog.pen = { mode, x: px, y: py, t };
+  }
+
+  function makeCondensation() {
+    const size = 256;
+    const c = new OffscreenCanvas(size, size), g = c.getContext("2d");
+    for (let i = 0; i < 900; i++) {
+      const r = Math.random() < 0.9 ? rand(0.4, 1.2) : rand(1.5, 3);
+      g.fillStyle = `rgba(255,255,255,${rand(0.15, 0.5)})`;
+      g.beginPath();
+      g.arc(rand(0, size), rand(0, size), r, 0, Math.PI * 2);
+      g.fill();
+    }
+    return c;
+  }
+
+  /** Lays the fog over what's already on `ctx` (so it fogs the privacy blur too, if that's on). */
+  function drawFog(ctx, amount, t, w, h) {
+    ensureMask(w, h, t);
+    const lw = mask.canvas.width, lh = mask.canvas.height;
+
+    if (t - fog.refogAt >= REFOG_STEP) {
+      const m = mask.ctx;
+      m.globalAlpha = 1 - Math.exp(-Math.min(1, t - fog.refogAt) / REFOG_SECONDS);
+      m.fillStyle = "#fff";
+      m.fillRect(0, 0, lw, lh);
+      m.globalAlpha = 1;
+      fog.refogAt = t;
+    }
+
+    const f = context(layer, lw, lh, true);
+    f.globalCompositeOperation = "copy";
+    f.filter = `blur(${Math.max(2, lh / 60)}px)`;
+    f.drawImage(ctx.canvas, 0, 0, lw, lh);
+    f.filter = "none";
+    f.globalCompositeOperation = "source-over";
+    f.fillStyle = "rgba(226,232,238,0.55)";
+    f.fillRect(0, 0, lw, lh);
+    condensation ??= makeCondensation();
+    f.globalAlpha = 0.6;
+    f.fillStyle = f.createPattern(condensation, "repeat");
+    f.fillRect(0, 0, lw, lh);
+    // Keep the fog only where the mask has it, faded by how far the fog has rolled in.
+    f.globalCompositeOperation = "destination-in";
+    f.globalAlpha = amount;
+    f.filter = "blur(1px)";  // soft edges on the lines
+    f.drawImage(mask.canvas, 0, 0);
+    f.filter = "none";
+    f.globalAlpha = 1;
+    f.globalCompositeOperation = "source-over";
+
+    ctx.drawImage(layer.canvas, 0, 0, w, h);
+  }
+
+  // ------------------------------------------------------------------ every frame
+
   /**
    * Draws the active effects on a camera frame. Returns the same frame untouched when nothing is
    * happening (the cheap, common case), otherwise a new frame; the caller closes the old one.
@@ -237,7 +374,8 @@
     const privacy = privacyAmount(t);
     const shakeAge = t - state.shakeAt;
     const shaking = shakeAge < SHAKE_SECONDS;
-    const busy = privacy > 0.001 || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
+    const fogged = fogAmount(t);
+    const busy = privacy > 0.001 || fogged > 0.001 || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
     if (!busy) return frame;
 
     const w = frame.displayWidth, h = frame.displayHeight;
@@ -267,6 +405,7 @@
       ctx.drawImage(frame, ...rect);
     }
 
+    if (fogged > 0.001) drawFog(ctx, fogged, t, w, h);
     drawSmoke(ctx, t, w, h);
     drawConfetti(ctx, t, w, h);
     drawBangs(ctx, t, w, h);
@@ -285,11 +424,13 @@
     });
   }
 
-  /** A command from the extension: { name: "confetti" | "bang" | "privacy", ... }. */
+  /** A command from the extension: { name: "confetti" | "bang" | "privacy" | "fog" | "fogPen", ... }. */
   function run(cmd) {
     if (cmd.name === "confetti") confetti(cmd.x, cmd.y);
     else if (cmd.name === "bang") bang(cmd.x, cmd.y, cmd.dx, cmd.dy);
     else if (cmd.name === "privacy") privacy(!!cmd.on);
+    else if (cmd.name === "fog") setFog(!!cmd.on);
+    else if (cmd.name === "fogPen") fogPen(cmd.mode, cmd.x, cmd.y);
   }
 
   app.fx = { render, run };

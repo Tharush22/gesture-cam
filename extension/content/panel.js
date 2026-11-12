@@ -42,6 +42,7 @@ export const EFFECTS = [
   { key: "confetti", title: "Confetti", how: "Thumbs up", gesture: "thumbsUp" },
   { key: "privacy", title: "Privacy blur", how: "Open palm (toggles)", gesture: "openPalm" },
   { key: "bang", title: "Bang!", how: "Finger gun", gesture: "fingerGun" },
+  { key: "fog", title: "Fog mirror", how: "Peace sign (toggles)", gesture: "peace" },
 ];
 
 export class Panel {
@@ -96,7 +97,14 @@ export class Panel {
   /** state: "loading" | "ready" | "error" */
   setState(state, text) {
     this.$(".light").className = `light ${state}`;
-    this.$(".status").textContent = text;
+    this.status = text;
+    this.showStatus(text);
+  }
+
+  /** Shows a message in the status line; with no text, goes back to the normal one. */
+  showStatus(text = this.status) {
+    const el = this.$(".status");
+    if (el.textContent !== text) el.textContent = text;
   }
 
   /** Highlights the effects whose gestures are in view right now. */
@@ -104,9 +112,9 @@ export class Panel {
     for (const e of EFFECTS) this.$(`.effect[data-key="${e.key}"]`).classList.toggle("seen", gestures.has(e.gesture));
   }
 
-  /** Lights up the privacy "Try" button while privacy mode is on. */
-  showPrivacy(on) {
-    const button = this.$('.effect[data-key="privacy"] .try');
+  /** Lights up an effect's "Try" button while an on/off effect (privacy, fog) is on. */
+  showOn(key, on) {
+    const button = this.$(`.effect[data-key="${key}"] .try`);
     button.classList.toggle("on", on);
     button.textContent = on ? "Turn off" : "Try";
   }

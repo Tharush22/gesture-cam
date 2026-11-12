@@ -7,6 +7,16 @@ Hand-gesture effects for your webcam in browser video calls. Everyone else in th
 | 👍 Thumbs up | A burst of confetti from your thumb |
 | ✋ Open palm, held upright | Privacy mode: pixelates the picture. Do it again to turn it off. |
 | 👉 Finger gun (index out, thumb up) | Muzzle flash, "BANG!", screen shake and smoke |
+| ✌️ Peace sign | **Fog mirror**: the picture steams up like a bathroom mirror. Do it again to clear it. |
+
+While the fog mirror is on, you can write on it:
+
+| Gesture | What it does |
+|---|---|
+| Only your ring finger out | Draws: wipes a clear line through the fog |
+| Only your index finger out (thumb tucked in) | Erases: rubs fog back over your lines |
+
+Lines slowly mist over again in about 15 seconds, like a real mirror. Your self-view is mirrored, so writing looks right to you, but the others in the call see text reversed, the way it would look from behind real glass.
 
 It works in Google Meet, and in Zoom and Microsoft Teams when you use them in the browser.
 
