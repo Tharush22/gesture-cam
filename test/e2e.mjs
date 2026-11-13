@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const EXTENSION = join(ROOT, "extension");
+const EXTENSION = process.env.EXTENSION_DIR ?? join(ROOT, "extension");  // or test another copy, like a release zip
 const OUT = join(ROOT, "test", "out");
 mkdirSync(OUT, { recursive: true });
 const work = mkdtempSync(join(tmpdir(), "gesture-cam-"));
@@ -61,6 +61,12 @@ async function open(photo) {
     viewport: { width: 1000, height: 600 },
   });
   await context.route("https://meet.google.com/**", (route) => route.fulfill({ contentType: "text/html", body: MEETING }));
+  // Remember every website the browser talks to (besides the fake meeting and the extension itself).
+  const outside = new Set();
+  context.on("request", (r) => {
+    const { protocol, host } = new URL(r.url());
+    if (protocol !== "chrome-extension:" && host !== "meet.google.com") outside.add(host);
+  });
   const page = await context.newPage();
   const logs = [];
   page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
@@ -68,7 +74,7 @@ async function open(photo) {
   const label = await page.evaluate(() => window.camera);
   await page.locator("gesture-cam-panel .light.ready").waitFor({ timeout: 30000 });
   await page.waitForTimeout(300);
-  return { context, page, logs, label };
+  return { context, page, logs, label, outside, opened: Date.now() };
 }
 
 /** The most the picture changed within `ms`, stopping early once an effect clearly shows. */
@@ -117,7 +123,7 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
 
 // 4. The Try buttons, including finger gun and Rasengan (there are no photos of those).
 {
-  const { context, page } = await open("fist");
+  const { context, page, outside, opened } = await open("fist");
   for (const key of ["bang", "confetti", "orb", "privacy"]) {
     await page.evaluate(() => window.snapshot());
     await page.locator(`gesture-cam-panel .effect[data-key="${key}"] .try`).click();
@@ -191,6 +197,10 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
     return state;
   });
   check(afterOriginal === "live", `a cloned track keeps working after the original stops (${afterOriginal})`);
+
+  // 7. Nothing goes online. MediaPipe would send usage stats once a minute, so wait past that.
+  await page.waitForTimeout(Math.max(0, 65000 - (Date.now() - opened)));
+  check(outside.size === 0, `nothing is sent online after a minute${outside.size ? ": " + [...outside].join(", ") : ""}`);
   await context.close();
 }
 

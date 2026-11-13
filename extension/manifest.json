@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gesture Cam",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Hand gesture effects for your webcam in video calls: confetti, privacy blur, bang, fog mirror, Rasengan and a fake bad connection.",
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
   "permissions": ["storage"],

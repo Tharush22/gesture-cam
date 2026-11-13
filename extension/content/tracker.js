@@ -22,6 +22,17 @@ export async function loadHandTracker(url) {
   const factory = (moduleArg = {}) =>
     moduleFactory(Object.assign(moduleArg, { print: quiet(console.log), printErr: quiet(console.error) }));
 
+  // MediaPipe sends usage stats to Google (odml.pa.googleapis.com) once a minute. I block that, so
+  // nothing from this extension goes online. It can only load its own files.
+  // (This only changes fetch for the extension's code, not for the meeting site.)
+  const realFetch = globalThis.fetch.bind(globalThis);
+  const ownFiles = url("");
+  globalThis.fetch = (input, init) => {
+    const href = typeof input === "string" ? input : (input?.url ?? String(input));
+    if (!href.startsWith(ownFiles)) return Promise.reject(new TypeError("Gesture Cam doesn't go online"));
+    return realFetch(input, init);
+  };
+
   // Without a real graphics card, GPU mode is much slower than CPU mode, so skip it.
   const delegates = softwareGpu() ? ["CPU"] : ["GPU", "CPU"];
   let landmarker = null;
