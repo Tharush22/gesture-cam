@@ -6,7 +6,7 @@ Chrome extension that adds effects to your webcam when you do hand gestures. Wor
 
 - 👍 **Thumbs up**: confetti
 - ✋ **Open palm**: privacy blur (again to turn off)
-- 👉 **Finger gun**: BANG!
+- 👉 **Finger gun**
 - ✌️ **Peace sign**: fog mirror (again to clear)
   - index finger draws, middle finger erases
 - 🤚 **Flat hand, palm up**: Rasengan
