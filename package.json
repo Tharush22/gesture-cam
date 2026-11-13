@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "author": "Tharush22",
-  "description": "Hand-gesture webcam effects for browser video calls (Chrome extension).",
+  "description": "Chrome extension that adds hand gesture effects to your webcam in video calls.",
   "type": "module",
   "scripts": {
     "test": "node test/photos.mjs",

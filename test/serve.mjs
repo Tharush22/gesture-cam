@@ -1,4 +1,4 @@
-// Tiny static file server for the tests (serves the project root).
+// A small file server for the tests.
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";

@@ -1,22 +1,22 @@
-// Checks the gesture rules against real hand photos, using the real hand tracker in Chromium.
+// Checks the gesture rules on real hand photos, using the real hand tracker in Chrome.
 //   node test/photos.mjs
 import { chromium } from "playwright";
 import { serve } from "./serve.mjs";
 
-// What each photo should (and shouldn't) trigger. right_hands has two hands: one upright, one upside down.
+// What each photo should do. right_hands has two hands: one upright and one upside down.
 const EXPECT = {
   thumb_up: ["thumbsUp"],
-  pointing_up: ["indexPoint"],          // the fog mirror's eraser
+  pointing_up: ["indexPoint"],          // the fog pen
   pointing_up_rotated: ["indexPoint"],
   victory: ["peace"],
   fist: [null],
   right_hands: ["openPalm", null],
-  // Real hands moved in 3D, for poses there's no photo of (see photos.html).
+  // Real hands turned or changed in 3D, for poses I don't have photos of (see photos.html).
   "open hand tilted flat": ["flatHand"],
   "open hand tilted flat the other way": ["flatHand"],
   "open hand turned sideways": [null],
   "middle finger instead of index": ["middlePoint"],
-  // Two-hand gestures: these check the pair, not each hand.
+  // Two-hand gestures check both hands together.
   "both hands: real photo, one upside down": [null],
   "both hands: two open hands up": ["bothHandsUp"],
   "both hands: one open hand up": [null],

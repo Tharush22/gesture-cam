@@ -2,8 +2,8 @@
 <meta charset="utf-8">
 <title>Gesture Cam photo test</title>
 <script type="module">
-// Runs the real hand tracker on the photos in test/images and classifies each hand.
-// Opened by test/photos.mjs; also handy to open by hand while tuning thresholds.
+// Runs the hand tracker on the photos in test/images and checks each hand's gesture.
+// photos.mjs opens this. You can also open it yourself when adjusting the gesture rules.
 import factory from "../extension/vendor/mediapipe/vision_wasm_module_internal.js";
 import { HandLandmarker } from "../extension/vendor/mediapipe/vision_bundle.mjs";
 import { bothHandsUp, classify, measure } from "../extension/content/gestures.js";
@@ -29,18 +29,18 @@ for (const name of PHOTOS) {
       fingers: Object.fromEntries(Object.entries(m.fingers).map(([k, f]) => [k, f.extended ? "out" : f.curled ? "curled" : "?"])),
       thumb: { out: m.thumbOut, straight: +m.thumbStraight.toFixed(2), gap: +m.thumbGap.toFixed(2), dirY: +m.thumbDir[1].toFixed(2) },
       handDirY: +m.handDir[1].toFixed(2),
-      palmFacingY: +m.palmFacing[1].toFixed(2),  // near ±1 means the hand lies flat
+      palmFacingY: +m.palmFacing[1].toFixed(2),  // close to 1 or -1 means the hand is flat
     };
   });
 }
-// Made-up variants of real hands, for poses no photo shows. Each is a real hand moved in 3D.
-const W = {}, H = {};  // photo sizes, to turn normalized points into pixels and back
+// Made-up poses from real hands, for poses I don't have photos of.
+const W = {}, H = {};  // photo sizes
 for (const name of PHOTOS) { const i = new Image(); i.src = `images/${name}.jpg`; await i.decode(); W[name] = i.naturalWidth; H[name] = i.naturalHeight; }
 const handFrom = async (photo, gesture) => {
   const img = new Image(); img.src = `images/${photo}.jpg`; await img.decode();
   return hands.detect(img).landmarks.find((lm) => classify(lm, W[photo], H[photo])?.name === gesture);
 };
-// Rotate a hand about its wrist. axis "x" tips it forward/back; "z" turns it in the picture's plane.
+// Turn a hand around its wrist. "x" tips it forward or back, "z" turns it sideways.
 const rotate = (lm, photo, axis, degrees) => {
   const w = W[photo], h = H[photo], a = (degrees * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
   const o = [lm[0].x * w, lm[0].y * h, lm[0].z * w];
@@ -51,7 +51,7 @@ const rotate = (lm, photo, axis, degrees) => {
     return { x: (x + o[0]) / w, y: (y + o[1]) / h, z: (z + o[2]) / w };
   });
 };
-// Swap two fingers' shapes, keeping each on its own knuckle.
+// Swap the shapes of two fingers.
 const swapFingers = (lm, a, b) => {
   const out = lm.map((q) => ({ ...q }));
   for (let j = 1; j < 4; j++) {
@@ -72,7 +72,7 @@ const variants = {
 for (const [name, [photo, lm]] of Object.entries(variants)) {
   results[name] = [{ gesture: classify(lm, W[photo], H[photo])?.name ?? null, palmFacingY: +measure(lm, W[photo], H[photo]).palmFacing[1].toFixed(2) }];
 }
-// Two-hand gestures look at all the hands together.
+// Two-hand gestures look at both hands together.
 const shift = (lm, dx) => lm.map((q) => ({ ...q, x: q.x + dx }));
 const bothPhoto = new Image(); bothPhoto.src = "images/right_hands.jpg"; await bothPhoto.decode();
 const pair = (hands) => [{ gesture: bothHandsUp(hands, W.right_hands, H.right_hands)?.name ?? null }];

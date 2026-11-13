@@ -1,13 +1,11 @@
-// The effects engine. It draws on top of each camera frame with a plain 2D canvas: confetti, the
-// privacy blur, the finger-gun bang, the fog mirror you can draw on, the Rasengan, and a fake
-// bad connection.
+// Draws all the effects on top of each camera frame, using a 2D canvas:
+// confetti, privacy blur, bang, fog mirror, Rasengan and bad connection.
 //
-// This file runs in the meeting page's own JavaScript world (see manifest.json), next to
-// page/camera.js, because that is where the camera frames are. The hand tracking runs in the
-// extension's world (content/) and sends commands here: confetti, privacy, bang.
+// This runs inside the meeting page next to camera.js, because that's where the camera frames are.
+// main.js does the hand tracking and sends commands here, like "confetti".
 //
-// Every animation is a pure function of time since it started, so it looks the same no matter
-// how many camera streams are being drawn or how often.
+// Each animation is worked out from how long ago it started, so it looks the same
+// no matter how often frames get drawn.
 (() => {
   const app = (globalThis[Symbol.for("gesture-cam")] ??= {});
   if (app.fx) return;
@@ -17,7 +15,7 @@
   const easeOut = (t) => 1 - (1 - t) ** 3;
   const rand = (a, b) => a + Math.random() * (b - a);
 
-  // Position under drag k and gravity g, in closed form: start speed v, after t seconds.
+  // How far something has moved after t seconds, with starting speed v, air drag k and gravity g.
   const drift = (v, k, t) => (v * (1 - Math.exp(-k * t))) / k;
   const fall = (g, k, t) => g * (t / k - (1 - Math.exp(-k * t)) / (k * k));
 
@@ -28,8 +26,8 @@
   const MUZZLE_SECONDS = 0.2;
   const BANG_TEXT_SECONDS = 0.8;
 
-  // Positions: x is a fraction of the frame width, y a fraction of its height. Speeds and sizes are
-  // in frame heights, so the effects look the same at any resolution or aspect ratio.
+  // Positions go from 0 to 1 across the picture. Sizes and speeds are measured in picture heights,
+  // so the effects look the same at any camera size.
   const state = {
     confetti: [],
     smoke: [],
@@ -62,7 +60,7 @@
     const t0 = clock();
     const n = Math.hypot(dx, dy) || 1;
     [dx, dy] = [dx / n, dy / n];
-    // Spikes of the muzzle flash, fixed per shot so it doesn't flicker between streams.
+    // The spikes of the muzzle flash. Picked once per shot so they don't flicker.
     const spikes = Array.from({ length: 7 }, (_, i) => ({ angle: (i - 3) * 0.32 + rand(-0.08, 0.08), length: rand(0.5, 1) }));
     state.bangs.push({ t0, x, y, dx, dy, spikes, tilt: rand(-0.25, 0.1) });
     state.shakeAt = t0;
@@ -79,7 +77,7 @@
 
   function privacy(on) {
     if (on === state.privacyOn) return;
-    // Start the fade from wherever the last one got to, so a quick double toggle doesn't jump.
+    // Start the fade from where the last one stopped, so switching quickly doesn't jump.
     const t = clock();
     const progress = clamp01((t - state.privacyAt) / PRIVACY_FADE);
     state.privacyOn = on;
@@ -124,7 +122,7 @@
       ctx.globalAlpha = clamp01((p.life - age) / 0.5);
       ctx.translate(x, y);
       ctx.rotate(p.angle + p.spin * age);
-      ctx.scale(1, Math.cos(p.phase + p.tumble * age));  // tumbling: the piece turns edge-on and back
+      ctx.scale(1, Math.cos(p.phase + p.tumble * age));  // squash it to make it look like it's flipping
       ctx.fillStyle = p.color;
       ctx.fillRect(-s / 2, (-s * p.ratio) / 2, s, s * p.ratio);
       ctx.restore();
@@ -184,7 +182,7 @@
         ctx.restore();
       }
 
-      // Comic-book "BANG!" that pops out ahead of the barrel.
+      // Comic book style "BANG!" text in front of the finger.
       const pop = clamp01(age / 0.12);
       const scale = pop < 1 ? 0.4 + 0.8 * easeOut(pop) : 1.2 - 0.2 * clamp01((age - 0.12) / 0.15);
       const alpha = clamp01((BANG_TEXT_SECONDS - age) / 0.3);
@@ -231,26 +229,26 @@
 
   // ------------------------------------------------------------------ fog mirror
   //
-  // The fog is a copy of the picture, blurred and whitened, laid over the clear one. A "mask" canvas
-  // says how thick the fog is at each spot: opaque is full fog, transparent is clear glass.
+  // The fog is a blurry, whiter copy of the picture laid on top of the normal one.
+  // A "mask" says where the fog is: solid means foggy, empty means clear.
   //   - Drawing (index finger) cuts lines out of the mask.
   //   - Erasing (middle finger) paints the mask back in.
-  //   - Every quarter second a thin coat is painted over the whole mask, so lines slowly mist over.
-  // The mask keeps its contents between frames; that's what lets a drawing build up stroke by stroke.
+  //   - Every quarter second a thin layer of fog is added everywhere, so lines slowly fog over again.
+  // The mask stays between frames, which is how your drawing builds up.
 
   const FOG_IN_SECONDS = 1.2, FOG_OUT_SECONDS = 0.8;
-  const REFOG_SECONDS = 5;   // lines are about 95% fogged over after three times this: ~15 s
-  const REFOG_STEP = 0.25;   // coats any thinner than this round away to nothing on an 8-bit mask
-  const PEN_WIDTH = 0.035, ERASER_WIDTH = 0.1;  // in frame heights
-  // A stroke ends when the finger stops pointing (the extension sends a "pen lifted"). This gap is
-  // only a backstop, and generous: on a slow computer fingertip updates can be 0.3 s apart or more.
+  const REFOG_SECONDS = 5;   // lines are almost fully fogged over after about 15 seconds
+  const REFOG_STEP = 0.25;   // add fog every 0.25 s (thinner layers would be too faint to show up)
+  const PEN_WIDTH = 0.035, ERASER_WIDTH = 0.1;  // compared to the picture's height
+  // A line ends when you stop pointing. This is just a backup in case that message never comes.
+  // It's long because on a slow computer the fingertip updates can be far apart.
   const PEN_GAP = 1.0;
-  // (The fingertip arrives already smoothed: see content/smoothing.js.)
+  // (The fingertip is already smoothed by smoothing.js.)
 
   const fog = { on: false, at: -1e9, from: 0, pen: null, refogAt: 0 };
   const mask = { canvas: null, ctx: null };
   const layer = { canvas: null, ctx: null };
-  let condensation = null;  // a tiled texture of tiny droplets, made once
+  let condensation = null;  // a pattern of tiny water droplets, made once
 
   function fogAmount(t) {
     const k = easeOut(clamp01((t - fog.at) / (fog.on ? FOG_IN_SECONDS : FOG_OUT_SECONDS)));
@@ -260,25 +258,25 @@
   function setFog(on) {
     if (on === fog.on) return;
     const t = clock();
-    fog.from = fogAmount(t);  // carry on from wherever a fade got to
-    if (on && fog.from < 0.01) mask.canvas = null;  // fresh fog: start from a clean, fully fogged mask
+    fog.from = fogAmount(t);  // keep going from wherever the fade was
+    if (on && fog.from < 0.01) mask.canvas = null;  // new fog, so start fully fogged
     fog.on = on;
     fog.at = t;
     fog.pen = null;
   }
 
-  /** Makes sure the mask exists at half the frame's size, fully fogged when new. */
+  /** Makes the mask (half the picture's size) if it doesn't exist yet, fully fogged. */
   function ensureMask(w, h, t) {
     const mw = Math.max(1, Math.round(w / 2)), mh = Math.max(1, Math.round(h / 2));
     if (mask.canvas && mask.canvas.width === mw && mask.canvas.height === mh) return;
-    mask.canvas = null;  // a different camera size can't keep the old drawing
+    mask.canvas = null;  // if the camera size changed, the old drawing can't be kept
     const m = context(mask, mw, mh, true);
     m.fillStyle = "#fff";
     m.fillRect(0, 0, mw, mh);
     fog.refogAt = t;
   }
 
-  /** The pen moved: mode "draw" (clear a line), "erase" (fog it back), or null (pen lifted). */
+  /** The pen moved. mode is "draw", "erase", or null when the pen is lifted. */
   function fogPen(mode, x, y) {
     const t = clock();
     const pen = fog.pen;
@@ -290,14 +288,14 @@
     const point = [x * mask.canvas.width, y * mask.canvas.height];
     const joined = pen && pen.mode === mode && t - pen.t < PEN_GAP;
     if (!joined) {
-      // First touch of a stroke: a single dot.
-      // (A zero-length line can be skipped when stroking, so nudge the end a hair.)
+      // Start of a new line, so just draw a dot.
+      // (A line with no length might not get drawn, so make it very slightly longer.)
       penStroke(mode, (m) => { m.moveTo(...point); m.lineTo(point[0] + 0.01, point[1]); });
       fog.pen = { mode, prev: null, last: point, t };
       return;
     }
-    // Curve through the points instead of joining them with straight lines: each piece runs from
-    // the middle of one gap to the middle of the next, bending through the point in between.
+    // Draw a smooth curve through the points instead of straight lines between them.
+    // Each piece goes from halfway between two points to halfway between the next two.
     const { prev, last } = pen;
     penStroke(mode, (m) => {
       m.moveTo(...(prev ? mid(prev, last) : last));
@@ -308,7 +306,7 @@
 
   const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 
-  /** Strokes a path on the mask: "draw" cuts it out of the fog, "erase" paints fog back. */
+  /** Draws a line on the mask. "draw" clears the fog, "erase" puts it back. */
   function penStroke(mode, path) {
     const m = mask.ctx;
     m.save();
@@ -335,7 +333,7 @@
     return c;
   }
 
-  /** Lays the fog over what's already on `ctx` (so it fogs the privacy blur too, if that's on). */
+  /** Puts the fog on top of the picture (including the privacy blur, if it's on). */
   function drawFog(ctx, amount, t, w, h) {
     ensureMask(w, h, t);
     const lw = mask.canvas.width, lh = mask.canvas.height;
@@ -361,10 +359,10 @@
     f.globalAlpha = 0.6;
     f.fillStyle = f.createPattern(condensation, "repeat");
     f.fillRect(0, 0, lw, lh);
-    // Keep the fog only where the mask has it, faded by how far the fog has rolled in.
+    // Only keep the fog where the mask says, and fade it while it's coming in.
     f.globalCompositeOperation = "destination-in";
     f.globalAlpha = amount;
-    f.filter = "blur(1px)";  // soft edges on the lines
+    f.filter = "blur(1px)";  // softer edges on the lines
     f.drawImage(mask.canvas, 0, 0);
     f.filter = "none";
     f.globalAlpha = 1;
@@ -375,15 +373,14 @@
 
   // ------------------------------------------------------------------ Rasengan
   //
-  // A ball of spinning wind and light that hovers above your hand: a glowing core, streaks of wind
-  // whirling around it at different tilts (which makes it look round), a ring of wind outside and
-  // sparks in orbit. The extension sends your hand's position several times a second; between
-  // updates the orb glides toward the newest one, so it moves smoothly even though hand tracking is
-  // choppier than the video. When the updates stop, it shrinks away.
+  // A spinning ball of light above your hand. It has a glowing middle, spinning streaks at
+  // different angles (so it looks round), a ring around the outside and sparks flying around it.
+  // Hand tracking updates less often than the video, so between updates the ball slides toward
+  // your hand to keep it smooth. When the updates stop, it shrinks away.
 
-  const ORB_GROW = 0.35, ORB_SHRINK = 0.3;  // seconds
-  const ORB_HOLD = 0.6;    // keep it up this long after the last update (tracking can be slow)
-  const ORB_FOLLOW = 14;   // how fast it glides to your hand: higher is snappier, lower is floatier
+  const ORB_GROW = 0.35, ORB_SHRINK = 0.3;  // in seconds
+  const ORB_HOLD = 0.6;    // keep showing it this long after the last update
+  const ORB_FOLLOW = 14;   // how fast it follows your hand (higher = faster)
 
   const orb = { x: 0.5, y: 0.5, size: 0.2, target: null, shownAt: -1e9, until: -1e9, lastT: 0, arcs: null, sparks: null };
 
@@ -393,10 +390,10 @@
     return grow * shrink;
   }
 
-  /** Where your hand is now: x, y (0..1 of the picture) and size (fraction of its height). */
+  /** Where your hand is now (x, y) and how big it is. */
   function orbUpdate(x, y, size, hold = ORB_HOLD) {
     const t = clock();
-    if (orbAmount(t) <= 0) {  // appearing: start right at the hand, not gliding in from the last spot
+    if (orbAmount(t) <= 0) {  // just appearing, so start right at the hand
       Object.assign(orb, { x, y, size, shownAt: t, lastT: t });
     }
     orb.target = { x, y, size };
@@ -415,7 +412,7 @@
 
   function drawOrb(ctx, amount, t, h) {
     const w = ctx.canvas.width;
-    // Glide toward the hand. (Several camera streams can draw in the same instant: dt is then 0.)
+    // Slide toward the hand.
     const dt = Math.min(0.1, Math.max(0, t - orb.lastT));
     orb.lastT = t;
     if (orb.target) {
@@ -427,9 +424,9 @@
     if (!orb.arcs) makeOrbParts();
 
     const cx = orb.x * w, cy = orb.y * h;
-    const R = orb.size * h * 0.55 * (0.3 + 0.7 * amount) * (1 + 0.03 * Math.sin(t * 37));  // a slight crackle
+    const R = orb.size * h * 0.55 * (0.3 + 0.7 * amount) * (1 + 0.03 * Math.sin(t * 37));  // small flicker
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";  // light adds up, so overlapping streaks glow brighter
+    ctx.globalCompositeOperation = "lighter";  // overlapping light gets brighter
     ctx.globalAlpha = Math.min(1, amount * 1.2);
 
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 2.4);
@@ -483,20 +480,20 @@
 
   // ------------------------------------------------------------------ bad connection
   //
-  // Makes your video look like your internet is dying, in stages:
-  //   1. Lagging: choppy and blocky. A new picture only "gets through" every so often (more rarely
-  //      as it goes on), often at low quality, and sometimes only in patches, leaving the rest stale.
-  //   2. Frozen: stuck on the last picture that got through.
-  //   3. Dead: black, as if the camera dropped out.
-  // Turning it off "reconnects": a moment of blockiness, then the live picture.
+  // Makes it look like your internet is going out:
+  //   1. Lagging: choppy and blocky. The picture only updates now and then, gets worse over time,
+  //      and sometimes only part of it updates.
+  //   2. Frozen: stuck on the last picture.
+  //   3. Dead: black, like the camera stopped working.
+  // Turning it off "reconnects": blocky for a moment, then back to normal.
 
   const LAG_SECONDS = 5;       // how long the choppy stage lasts
   const FREEZE_SECONDS = 6;    // then how long it stays frozen before going black
-  const RECOVER_SECONDS = 0.6; // blocky moment when it comes back
-  const MACROBLOCK = 32;       // patch size for partial updates, in pixels (like real video blocks)
+  const RECOVER_SECONDS = 0.6; // how long it's blocky when it comes back
+  const MACROBLOCK = 32;       // size of the patches that update, in pixels
 
   const lag = { on: false, at: -1e9, offAt: -1e9, holdUntil: 0 };
-  const held = { canvas: null, ctx: null, ready: false };  // the picture viewers are stuck on
+  const held = { canvas: null, ctx: null, ready: false };  // the picture people are stuck on
   const lowRes = { canvas: null, ctx: null };
 
   function setLag(on) {
@@ -510,14 +507,14 @@
     }
   }
 
-  /** "lag", "freeze", "dead", "recover", or null when the connection is fine. */
+  /** Which stage it's in: "lag", "freeze", "dead", "recover", or null if it's off. */
   function lagStage(t) {
     if (!lag.on) return t - lag.offAt < RECOVER_SECONDS ? "recover" : null;
     const age = t - lag.at;
     return age < LAG_SECONDS ? "lag" : age < LAG_SECONDS + FREEZE_SECONDS ? "freeze" : "dead";
   }
 
-  /** Draws `frame` at low quality: shrink it, then blow it back up without smoothing. */
+  /** Draws the frame at low quality by shrinking it and then stretching it back up. */
   function drawBlocky(ctx, frame, w, h, block) {
     if (block <= 1.5) {
       ctx.drawImage(frame, 0, 0, w, h);
@@ -530,7 +527,7 @@
     ctx.imageSmoothingEnabled = true;
   }
 
-  /** Draws the bad-connection picture for this moment onto ctx. */
+  /** Draws the bad connection picture for right now. */
   function drawLag(ctx, frame, stage, t, w, h) {
     if (stage === "dead") {
       ctx.fillStyle = "#000";
@@ -546,11 +543,11 @@
     if (!held.canvas || held.canvas.width !== w || held.canvas.height !== h) held.ready = false;
     const hc = context(held, w, h);
     if (!held.ready || (stage === "lag" && t >= lag.holdUntil)) {
-      // A new picture gets through.
+      // Let a new picture through.
       const age = t - lag.at;
-      const block = Math.random() < 0.6 ? rand(6, 10 + 4 * age) : 1;  // often low quality, worse over time
+      const block = Math.random() < 0.6 ? rand(6, 10 + 4 * age) : 1;  // often blocky, worse over time
       if (held.ready && Math.random() < 0.4) {
-        // Only some patches update; the rest stays stale, which looks smeared.
+        // Only update some patches and leave the rest old, so it looks smeared.
         hc.save();
         hc.beginPath();
         for (let i = 0; i < 4; i++) {
@@ -565,7 +562,7 @@
         drawBlocky(hc, frame, w, h, block);
       }
       held.ready = true;
-      lag.holdUntil = t + rand(0.1, 0.25 + 0.12 * age);  // choppier as it goes on
+      lag.holdUntil = t + rand(0.1, 0.25 + 0.12 * age);  // gets choppier over time
     }
     ctx.drawImage(held.canvas, 0, 0);
   }
@@ -573,8 +570,8 @@
   // ------------------------------------------------------------------ every frame
 
   /**
-   * Draws the active effects on a camera frame. Returns the same frame untouched when nothing is
-   * happening (the cheap, common case), otherwise a new frame; the caller closes the old one.
+   * Draws the effects that are on onto a camera frame. If nothing is on, it returns the same frame
+   * (most of the time). Otherwise it returns a new frame.
    */
   function render(frame) {
     const t = clock();
@@ -591,14 +588,14 @@
     const w = frame.displayWidth, h = frame.displayHeight;
     const ctx = context(main, w, h);
 
-    // A "bad connection" hides every other effect: confetti flying over a frozen picture would
-    // give the game away. (The others keep running underneath and reappear when it's over.)
+    // Bad connection hides all the other effects, because confetti moving over a frozen picture
+    // would give it away. They come back when it's turned off.
     if (stage) {
       drawLag(ctx, frame, stage, t, w, h);
       return new VideoFrame(main.canvas, { timestamp: frame.timestamp, duration: frame.duration ?? undefined, alpha: "discard" });
     }
 
-    // Screen shake: offset the picture, zoomed in slightly so the edges never show.
+    // Screen shake: move the picture around, zoomed in a bit so the edges don't show.
     let rect = [0, 0, w, h];
     if (shaking) {
       const k = 1 - shakeAge / SHAKE_SECONDS;
@@ -609,7 +606,7 @@
     }
 
     if (privacy > 0.001) {
-      // Pixelate: shrink the picture, then blow it back up without smoothing.
+      // Pixelate: shrink the picture, then stretch it back up so it looks blocky.
       const block = 1 + privacy * (w / 22 - 1);
       const sw = Math.max(1, Math.round(w / block)), sh = Math.max(1, Math.round(h / block));
       context(small, sw, sh).drawImage(frame, 0, 0, sw, sh);
@@ -628,7 +625,7 @@
     if (orbShown > 0) drawOrb(ctx, orbShown, t, h);
     drawBangs(ctx, t, w, h);
 
-    const flashAge = shakeAge;  // the white flash starts with the shot
+    const flashAge = shakeAge;  // the white flash starts at the same time as the bang
     if (flashAge < FLASH_SECONDS) {
       ctx.fillStyle = `rgba(255,255,255,${0.45 * (1 - flashAge / FLASH_SECONDS)})`;
       ctx.fillRect(0, 0, w, h);
@@ -642,7 +639,7 @@
     });
   }
 
-  /** A command from the extension: { name: "confetti" | "bang" | "privacy" | "fog" | "fogPen" | "orb" | "lag", ... }. */
+  /** Runs a command from main.js, like { name: "confetti", x, y }. */
   function run(cmd) {
     if (cmd.name === "confetti") confetti(cmd.x, cmd.y);
     else if (cmd.name === "bang") bang(cmd.x, cmd.y, cmd.dx, cmd.dy);

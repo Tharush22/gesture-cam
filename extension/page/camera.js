@@ -1,11 +1,10 @@
-// Camera hook. Runs in the meeting page's own JavaScript world, before the meeting app loads.
+// Takes over the camera. This runs inside the meeting page, before the meeting app loads.
 //
-// When the meeting asks for the camera, we open it, push every frame through page/fx.js, and give
-// the meeting a new video track carrying the result. Now and then we also send a small copy of a
-// frame to the extension's world (content/main.js), which looks for hands and sends back commands.
+// When the meeting asks for the camera, I open it myself, run every frame through fx.js, and give
+// the meeting my video instead. I also send small copies of frames to main.js, which finds hands
+// and sends back commands.
 //
-// The two worlds talk over a private MessageChannel. Its port is handed over once with
-// window.postMessage; after that, frames (as ImageBitmaps) and commands go through the port.
+// The two sides talk through a private MessageChannel, set up once with window.postMessage.
 (() => {
   const app = (globalThis[Symbol.for("gesture-cam")] ??= {});
   if (app.camera) return;
@@ -16,20 +15,20 @@
   const supported = typeof MediaStreamTrackProcessor === "function" && typeof MediaStreamTrackGenerator === "function";
   if (!realGetUserMedia || !supported || !app.fx) return;
 
-  const LINK_ATTEMPTS = 40, LINK_RETRY_MS = 100;  // give the extension's side up to 4 s to answer
-  const DETECT_WIDTH = 480;                       // width of the copies sent for hand tracking
+  const LINK_ATTEMPTS = 40, LINK_RETRY_MS = 100;  // wait up to 4 seconds for main.js to answer
+  const DETECT_WIDTH = 480;                       // width of the small copies sent for hand tracking
 
   // ------------------------------------------------------------------ link to the extension
 
   let port = null;
-  let wantFrame = false;  // the hand tracker is free and waiting for a frame
+  let wantFrame = false;  // true when the hand tracker is ready for another frame
 
   const linked = new Promise((resolve) => {
     let attempts = 0;
     (function hello() {
       if (port) return;
       if (attempts++ >= LINK_ATTEMPTS) return resolve(false);
-      // A new channel per attempt: a port can only be handed over once.
+      // Make a new channel each try, because a port can only be sent once.
       const channel = new MessageChannel();
       channel.port1.onmessage = (e) => {
         if (port || e.data?.type !== "ack") return;
@@ -51,7 +50,7 @@
   function sendFrame(frame) {
     wantFrame = false;
     const w = frame.displayWidth, h = frame.displayHeight;
-    const copy = frame.clone();  // the original moves on down the pipeline before this resolves
+    const copy = frame.clone();  // copy it, because the original frame keeps moving
     createImageBitmap(copy, { resizeWidth: DETECT_WIDTH, resizeHeight: Math.round((DETECT_WIDTH * h) / w), resizeQuality: "medium" })
       .then((bitmap) => port.postMessage({ type: "frame", bitmap }, [bitmap]))
       .catch(() => { wantFrame = true; })
@@ -60,7 +59,7 @@
 
   // ------------------------------------------------------------------ streams
 
-  const streams = [];  // ids of the camera streams we're drawing on; the newest is tracked for hands
+  const streams = [];  // camera streams I'm drawing on. The newest one is used for hand tracking.
   let nextId = 1;
 
   function reportCameras() {
@@ -91,7 +90,7 @@
       },
     });
     processor.readable.pipeThrough(draw).pipeTo(generator.writable)
-      .catch(() => {})  // normal when the camera stops
+      .catch(() => {})  // this happens normally when the camera stops
       .finally(() => {
         camera.stop();
         streams.splice(streams.indexOf(id), 1);
@@ -102,9 +101,9 @@
   }
 
   /**
-   * Makes our track behave like the camera to the meeting app: it reports the camera's name and
-   * settings, and resolution changes go to the camera. The camera turns off once every copy of our
-   * track has been stopped (apps often clone the track for the self-view).
+   * Makes my video act like the real camera, so the meeting app sees the camera's name and settings.
+   * The real camera only turns off once every copy of my video is stopped
+   * (meeting apps often copy it for your self-view).
    */
   function present(track, camera) {
     let live = 0;

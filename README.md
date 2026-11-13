@@ -1,68 +1,72 @@
 # Gesture Cam
 
-Hand-gesture effects for your webcam in browser video calls. Everyone else in the call sees the effects.
-
-| Gesture | Effect |
-|---|---|
-| 👍 Thumbs up | A burst of confetti from your thumb |
-| ✋ Open palm, held upright | Privacy mode: pixelates the picture. Do it again to turn it off. |
-| 👉 Finger gun (index out, thumb up) | Muzzle flash, "BANG!", screen shake and smoke |
-| ✌️ Peace sign | **Fog mirror**: the picture steams up like a bathroom mirror. Do it again to clear it. |
-| 🤚 Hand laid flat (palm up or down) | **Rasengan**: a spinning ball of wind and light hovers above your hand for as long as you hold it |
-| 🙌 Both hands up | **Bad connection**: your video lags and turns blocky (5 s), freezes (6 s), then goes black like the camera died. Both hands up again to "reconnect". |
-
-While the fog mirror is on, you can write on it:
-
-| Gesture | What it does |
-|---|---|
-| Only your index finger out | Draws: wipes a clear line through the fog |
-| Only your middle finger out | Erases: rubs fog back over your lines |
-
-The fingertip is smoothed (a "1€ filter", in `content/smoothing.js`) and lines are drawn as curves, so they come out steady even when hand tracking is slow. While the fog is on, the finger gun is switched off, so your thumb drifting out doesn't fire a bang mid-line.
-
-Lines slowly mist over again in about 15 seconds, like a real mirror. Your self-view is mirrored, so writing looks right to you, but the others in the call see text reversed, the way it would look from behind real glass.
+A Chrome extension that adds effects to your webcam in video calls when you make hand gestures. Everyone in the call sees them.
 
 It works in Google Meet, and in Zoom and Microsoft Teams when you use them in the browser.
 
-## Install
+## Gestures
 
-1. Open `chrome://extensions` in Chrome (or Edge, Brave or Arc).
-2. Turn on **Developer mode**.
-3. Click **Load unpacked** and choose the `extension/` folder.
+| Gesture | Effect |
+|---|---|
+| 👍 Thumbs up | Confetti shoots out from your thumb |
+| ✋ Open palm | Privacy mode: blurs your video into big pixels. Do it again to turn it off. |
+| 👉 Finger gun | Muzzle flash, "BANG!", screen shake and smoke |
+| ✌️ Peace sign | Fog mirror: your video fogs up like a bathroom mirror. Do it again to clear it. |
+| 🤚 Hand flat, palm up | Rasengan: a spinning ball of light above your hand while you hold it there |
+| 🙌 Both hands up | Bad connection: your video lags, freezes, then goes black like your internet died. Both hands up again to come back. |
 
-## Use
+### Drawing on the fog mirror
 
-Join a call with your camera on. A small **Gesture Cam** panel appears in the corner of the page. Only you can see it.
+When the fog is on:
 
-- The light turns green once hand tracking has loaded, which takes a few seconds the first time.
-- An effect's row lights up while its gesture is in view. Hold the gesture for about half a second to fire it.
-- **Try** fires an effect without the gesture, and the switch turns that gesture off.
-- Drag the panel by its title, and use **–** to fold it away.
+- Point with only your **index finger** to draw a clear line in the fog.
+- Point with only your **middle finger** to erase.
+- Lines slowly fog over again after about 15 seconds.
 
-Tip: keep your hand roughly facing the camera, and far enough away that your whole hand is in the frame.
+Your own self-view is mirrored, so your writing looks normal to you. Other people in the call see it backwards, like writing on a window from the other side.
+
+## How to install
+
+1. Download this repo (**Code → Download ZIP**) and unzip it.
+2. Go to `chrome://extensions` in Chrome.
+3. Turn on **Developer mode** in the top right.
+4. Click **Load unpacked** and pick the `extension` folder.
+
+## How to use
+
+1. Join a call and turn your camera on.
+2. A small **Gesture Cam** panel shows up in the corner. Only you can see it.
+3. Wait for the light to turn green (hand tracking takes a few seconds to load).
+4. Make a gesture and hold it for about half a second.
+
+Each effect has a **Try** button to test it without the gesture, and a switch to turn it off. You can drag the panel around or fold it with **–**.
+
+Tip: keep your whole hand in the picture, about an arm's length from the camera.
 
 ## How it works
 
 ```
- meeting page (page's own JS world)                 extension's isolated world
- ─────────────────────────────────────              ────────────────────────────
- page/camera.js                                     content/main.js
-   wraps getUserMedia()                               hand tracking (MediaPipe)
-   camera → page/fx.js → new video track  ── small frame copies ──▶  content/gestures.js
-            (draws effects)               ◀── "confetti" / "bang" ──  latches, panel
-                                              (private MessageChannel)
+ Meeting page                                      Extension
+ ────────────                                      ─────────
+ camera.js                                         main.js
+   takes over the camera                             finds your hands (MediaPipe)
+   camera → fx.js → video sent to the meeting  ── small copies ──▶  gestures.js
+            (draws the effects)                ◀── "confetti" ───   decides what to do
 ```
 
-- **`page/camera.js`** runs before the meeting app loads. When the meeting asks for the camera, it opens the camera itself and runs every frame through `fx.render()`. It then gives the meeting a new video track with the result. The track reports the real camera's name and settings, so the meeting app can't tell the difference.
-- **`page/fx.js`** draws the effects with a plain 2D canvas. When no effect is running, frames pass through untouched.
-- **`content/main.js`** runs in the extension's own isolated world. That's needed because the meeting site's security policy would block MediaPipe's WebAssembly. It receives small copies of the frames and finds hands with **`content/tracker.js`**. It turns hand shapes into gestures with **`content/gestures.js`** and sends effect commands back.
-- Hand tracking shares the page's main thread with the video. It paces itself so a slow computer gets slower gesture detection instead of choppy video.
+- **`page/camera.js`** takes over the camera before the meeting app loads. Every frame goes through `fx.js` before the meeting gets it.
+- **`page/fx.js`** draws all the effects with a 2D canvas. If no effect is on, the video is passed through as it is.
+- **`content/main.js`** gets small copies of the frames and uses MediaPipe to find your hands. It runs separately because meeting sites block MediaPipe from running inside the page.
+- **`content/gestures.js`** looks at the 21 points MediaPipe gives for each hand, checks which fingers are straight or curled, and works out the gesture.
+- **`content/smoothing.js`** smooths the fingertip position so drawing on the fog isn't shaky.
 
-## Add your own gesture and effect
+Hand tracking shares the same thread as the video, so it waits between checks. On a slow computer the video stays smooth and gestures are just a bit slower.
 
-1. **Gesture:** add a rule to `classify()` in `extension/content/gestures.js`. `measure()` already tells you which fingers are extended or curled, whether the thumb is out, and which way the hand points.
-2. **Effect:** add a function to `extension/page/fx.js`, call it from `run()`, and make `render()` draw it while it's active.
-3. **Wire it up:** add a row to `EFFECTS` in `extension/content/panel.js`, a `Latch` in `extension/content/main.js`, and a case in `fire()`.
+## Adding a new gesture
+
+1. **Gesture:** add a rule to `classify()` in `extension/content/gestures.js`.
+2. **Effect:** add a function to `extension/page/fx.js`, call it from `run()`, and draw it in `render()`.
+3. **Connect them:** add a row to `EFFECTS` in `extension/content/panel.js`, a `Latch` in `extension/content/main.js`, and a line in `fire()`.
 
 ## Tests
 
@@ -76,13 +80,13 @@ npm test
 npm run test:e2e
 ```
 
-- `npm test` runs the real hand tracker on the photos in `test/images/` and checks each one is classified correctly. This includes photos that shouldn't trigger anything: a fist, pointing, and a peace sign.
-- `npm run test:e2e` loads the extension into Chromium with a fake webcam made from those photos. It checks that the effects show on the video the meeting receives. It needs `ffmpeg`, and writes screenshots to `test/out/`.
+- `npm test` runs the hand tracker on real hand photos in `test/images/` and checks each gesture is recognised correctly, including ones that shouldn't do anything, like a fist.
+- `npm run test:e2e` loads the extension in Chrome with the photos as a fake webcam and checks the effects show up in the video. It needs `ffmpeg` and saves screenshots to `test/out/`.
 
 ## Credits
 
-Hand tracking uses Google's [MediaPipe](https://ai.google.dev/edge/mediapipe) (Apache License 2.0), bundled in `extension/vendor/mediapipe/` and `extension/models/`. The test photos come from MediaPipe's test assets.
+Hand tracking uses Google's [MediaPipe](https://ai.google.dev/edge/mediapipe) (Apache License 2.0). It's included in `extension/vendor/mediapipe/` and `extension/models/`. The test photos are from MediaPipe's test files.
 
 ## License
 
-[MIT](LICENSE) © 2026 Tharush22. The bundled MediaPipe files keep their own Apache 2.0 license.
+[MIT](LICENSE) © 2026 Tharush22. The MediaPipe files keep their own Apache 2.0 license.

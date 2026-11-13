@@ -1,5 +1,5 @@
-// The small floating control panel on the meeting page. Only you see it: the meeting only gets the
-// video. It lives in a shadow root so the meeting page's styles can't reach it.
+// The small control panel on the meeting page. Only you can see it, the meeting only gets the
+// video. It's kept in a shadow root so the meeting page's styles don't mess it up.
 
 const STYLE = `
 :host { all: initial; }
@@ -49,8 +49,8 @@ export const EFFECTS = [
 
 export class Panel {
   /**
-   * settings: { confetti, privacy, bang, folded } (booleans)
-   * on: { toggle(key, value), tryEffect(key), fold(folded) }
+   * settings: which effects are on, and whether the panel is folded.
+   * on: what to do when a switch, Try button or the fold button is clicked.
    */
   constructor(settings, on) {
     const host = document.createElement("gesture-cam-panel");
@@ -103,7 +103,7 @@ export class Panel {
     this.showStatus(text);
   }
 
-  /** Shows a message in the status line; with no text, goes back to the normal one. */
+  /** Shows a message in the status line. With no text, it goes back to the normal message. */
   showStatus(text = this.status) {
     const el = this.$(".status");
     if (el.textContent !== text) el.textContent = text;
@@ -114,7 +114,7 @@ export class Panel {
     for (const e of EFFECTS) this.$(`.effect[data-key="${e.key}"]`).classList.toggle("seen", gestures.has(e.gesture));
   }
 
-  /** Lights up an effect's "Try" button while an on/off effect (privacy, fog) is on. */
+  /** Lights up the Try button while an on/off effect (like privacy or fog) is on. */
   showOn(key, on) {
     const button = this.$(`.effect[data-key="${key}"] .try`);
     button.classList.toggle("on", on);

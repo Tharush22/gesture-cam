@@ -1,22 +1,20 @@
-// The extension's side, running in its own isolated world on the meeting page.
+// The main logic. Runs in the extension's own space on the meeting page.
 //
-// page/camera.js (in the page's world) hands us a private message port, then sends small copies of
-// camera frames through it. We find hands in them, turn hand shapes into gestures, and send effect
-// commands back for page/fx.js to draw. Two effects follow your hand continuously instead of
-// firing once: the fog mirror's pen (index finger draws, middle finger erases) and the Rasengan,
-// which hovers over a hand laid flat.
+// camera.js sends small copies of the camera frames here. I find the hands, work out the gestures,
+// and send commands back to fx.js to draw the effects.
+// Two effects follow your hand the whole time instead of firing once: the fog pen and the Rasengan.
 import { bothHandsUp, classify, Latch } from "./gestures.js";
 import { EFFECTS, Panel } from "./panel.js";
 import { OneEuroFilter } from "./smoothing.js";
 import { loadHandTracker } from "./tracker.js";
 
 const url = (path) => chrome.runtime.getURL(path);
-const MIN_FRAME_GAP_MS = 33;  // look for hands at most ~30 times a second
+const MIN_FRAME_GAP_MS = 33;  // check for hands up to about 30 times a second
 
 const settings = await chrome.storage.local.get({ confetti: true, privacy: true, bang: true, fog: true, orb: true, lag: true, folded: false });
 
-// How long each gesture must be held to fire, and how long it must be gone before it can fire again.
-// (The flat hand has no latch: the Rasengan stays for as long as you hold the pose.)
+// How long to hold each gesture before it fires, and how long it has to be gone before it can fire again.
+// The flat hand isn't here because the Rasengan stays as long as you hold your hand flat.
 const latches = {
   thumbsUp: new Latch(0.4, 0.6),
   openPalm: new Latch(0.6, 0.5),
@@ -49,7 +47,7 @@ function send(cmd) {
 
 // ------------------------------------------------------------------ startup
 
-// Nothing heavy loads until a call turns the camera on.
+// Don't load anything big until the camera turns on.
 function start() {
   panel ??= new Panel(settings, {
     toggle(key, value) {
@@ -92,7 +90,7 @@ function onFrame(bitmap) {
     const g = classify(landmarks, width, height);
     if (g) seen.set(g.name, g);
   }
-  // Two hands up is its own gesture, and then the open palms in it shouldn't toggle privacy.
+  // Two hands up is its own gesture, so the open palms shouldn't also turn on privacy.
   const both = bothHandsUp(hands, width, height);
   if (both) {
     seen.set(both.name, both);
@@ -102,7 +100,7 @@ function onFrame(bitmap) {
   for (const effect of EFFECTS) {
     const latch = latches[effect.gesture];
     if (!latch) continue;
-    // While the fog is on, index-plus-thumb is drawing, not a finger gun.
+    // While the fog is on, index finger plus thumb is drawing, not the finger gun.
     const active = settings[effect.key] && seen.has(effect.gesture) && !(fogOn && effect.gesture === "fingerGun");
     if (latch.update(active, t)) fire(effect.key, seen.get(effect.gesture));
   }
@@ -110,14 +108,14 @@ function onFrame(bitmap) {
   if (fogOn) movePen(seen, t);
   moveOrb(seen, t);
 
-  // Hand tracking shares the page's main thread with the video, so rest at least as long as it
-  // took: on a slow computer that keeps the picture moving at the cost of slower gestures.
+  // Hand tracking and the video share the same thread, so wait at least as long as tracking took.
+  // On a slow computer this keeps the video smooth, and gestures are just a bit slower.
   const took = performance.now() - started;
   const wait = Math.max(MIN_FRAME_GAP_MS - took, took);
   setTimeout(() => port.postMessage({ type: "want" }), wait);
 }
 
-/** Starts an effect. `where` is the gesture that triggered it, or null for the Try buttons. */
+/** Starts an effect. `where` is the gesture that set it off, or null for the Try buttons. */
 function fire(key, where) {
   if (key === "confetti") send({ name: "confetti", x: where?.x ?? 0.5, y: where?.y ?? 0.8 });
   else if (key === "bang") send({ name: "bang", x: where?.x ?? 0.3, y: where?.y ?? 0.6, dx: where?.dx ?? 1, dy: where?.dy ?? -0.25 });
@@ -152,20 +150,19 @@ function setFog(on) {
   panel?.showStatus(on ? "Fog on: index finger draws, middle finger erases." : undefined);
 }
 
-const PEN_LIFT_GRACE = 0.15;  // seconds the pose can drop out before the pen lifts (tracking blinks)
+const PEN_LIFT_GRACE = 0.15;  // tracking can miss the hand for this long without lifting the pen
 const penX = new OneEuroFilter(), penY = new OneEuroFilter();
-let pen = null;  // { mode, lastSeen } while the pen is down
+let pen = null;  // set while the pen is down
 
-/** Moves the fog mirror's pen: index finger draws, middle finger erases, anything else lifts it. */
+/** Moves the fog pen. Index finger draws, middle finger erases, anything else lifts it. */
 function movePen(seen, t) {
-  // With the fog on, index finger plus thumb (the finger gun) draws too, so a drifting thumb
-  // doesn't break your line.
+  // Index finger plus thumb also draws, so the line doesn't break if your thumb moves out.
   const draw = seen.get("indexPoint") ?? seen.get("fingerGun");
   const erase = seen.get("middlePoint");
   const tip = draw ?? erase;
   if (tip) {
     const mode = draw ? "draw" : "erase";
-    if (pen?.mode !== mode) {  // a new stroke: forget where the last one was
+    if (pen?.mode !== mode) {  // new line, so forget the old position
       penX.reset();
       penY.reset();
     }
@@ -179,11 +176,11 @@ function movePen(seen, t) {
 
 // ------------------------------------------------------------------ Rasengan
 
-const ORB_HOLD = 0.25;   // hold your hand flat this long before the orb appears
-const ORB_GRACE = 0.3;   // tracking blinks shorter than this don't restart the hold
+const ORB_HOLD = 0.25;   // hold your hand flat this long before the Rasengan shows up
+const ORB_GRACE = 0.3;   // short tracking misses don't restart the timer
 let orbSince = null, orbLastSeen = -Infinity;
 
-/** Keeps the Rasengan over your flat hand. page/fx.js fades it out once the updates stop. */
+/** Keeps the Rasengan above your flat hand. fx.js makes it fade out when the updates stop. */
 function moveOrb(seen, t) {
   const hand = settings.orb ? seen.get("flatHand") : null;
   if (!hand) {

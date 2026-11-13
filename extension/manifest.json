@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gesture Cam",
   "version": "0.1.0",
-  "description": "Hand-gesture effects for your webcam in browser video calls: thumbs up for confetti, open palm for a privacy blur, finger gun for a bang.",
+  "description": "Hand gesture effects for your webcam in video calls: confetti, privacy blur, bang, fog mirror, Rasengan and a fake bad connection.",
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
   "permissions": ["storage"],
   "content_scripts": [

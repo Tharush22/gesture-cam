@@ -1,13 +1,13 @@
-// Smooths a shaky signal, like a fingertip position from hand tracking.
+// Smooths out a shaky fingertip position so drawn lines aren't wobbly.
 //
-// This is the "1€ filter" (Casiez, Roussel and Vogel, CHI 2012). The trick: when the finger moves
-// slowly, smooth hard, which hides the jitter; when it moves fast, smooth lightly, which avoids lag.
-// A fixed amount of smoothing can only do one of those two well.
+// This uses the "1 euro filter", a known way to smooth pointer input.
+// When the finger moves slowly, it smooths a lot (hides the shaking).
+// When the finger moves fast, it smooths less (so the line doesn't lag behind).
 
 export class OneEuroFilter {
   /**
-   * minCutoff: smoothing when still (lower = smoother, laggier).
-   * beta: how quickly smoothing eases off as speed goes up (higher = less lag on fast strokes).
+   * minCutoff: how much to smooth when the finger is still (lower = smoother but slower).
+   * beta: how much less to smooth as the finger speeds up (higher = less lag).
    */
   constructor(minCutoff = 1.2, beta = 12, derivativeCutoff = 1) {
     this.minCutoff = minCutoff;
@@ -22,7 +22,7 @@ export class OneEuroFilter {
     this.time = 0;
   }
 
-  /** Feeds in a new reading `x` taken at time `t` (seconds) and returns the smoothed value. */
+  /** Takes a new position `x` at time `t` (in seconds) and returns the smoothed position. */
   filter(x, t) {
     if (this.value === null) {
       this.value = x;
@@ -31,7 +31,7 @@ export class OneEuroFilter {
     }
     const dt = Math.max(1e-3, t - this.time);
     this.time = t;
-    // How much of the new reading to take, for a given cutoff frequency (Hz).
+    // How much of the new position to use. Higher cutoff = follow it more closely.
     const weight = (cutoff) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
     this.speed += weight(this.derivativeCutoff) * ((x - this.value) / dt - this.speed);
     const cutoff = this.minCutoff + this.beta * Math.abs(this.speed);

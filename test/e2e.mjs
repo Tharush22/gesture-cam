@@ -1,9 +1,9 @@
-// End-to-end test: loads the real extension into Chromium, feeds it a fake webcam made from the
-// hand photos, and checks that the gestures fire their effects on the video the "meeting" gets.
-//   npm run test:e2e            (needs ffmpeg; writes screenshots to test/out/)
+// Full test: loads the real extension into Chrome, uses the hand photos as a fake webcam,
+// and checks that the effects show up in the video the meeting gets.
+//   npm run test:e2e   (needs ffmpeg, saves screenshots to test/out/)
 //
-// The meeting is a stand-in page served at https://meet.google.com/test, so the extension's content
-// scripts run on it, but nothing goes to Google: Playwright answers the request itself.
+// The "meeting" is a fake page at https://meet.google.com/test so the extension runs on it.
+// Nothing is actually sent to Google, the test answers the request itself.
 import { chromium } from "playwright";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -16,7 +16,7 @@ const OUT = join(ROOT, "test", "out");
 mkdirSync(OUT, { recursive: true });
 const work = mkdtempSync(join(tmpdir(), "gesture-cam-"));
 
-// A fake camera clip: 3 s of the photo, fitted into 1280x720. Chromium loops it.
+// Makes a fake camera video: 3 seconds of the photo at 1280x720. Chrome loops it.
 function clip(photo) {
   const file = join(work, `${photo}.y4m`);
   execFileSync("ffmpeg", ["-loglevel", "error", "-y", "-loop", "1", "-t", "3", "-i", join(ROOT, "test", "images", `${photo}.jpg`),
@@ -25,8 +25,8 @@ function clip(photo) {
   return file;
 }
 
-// The stand-in meeting. It shows the camera it gets, and can say how much of that picture has
-// changed since a reference snapshot: the percentage of pixels that differ noticeably.
+// The fake meeting page. It shows the video it gets, and can tell what percent of the
+// picture has changed since a saved snapshot.
 const MEETING = `<!doctype html><meta charset="utf-8"><title>Fake meeting</title>
 <body style="margin:0;background:#202124">
 <video id="v" autoplay muted playsinline style="width:640px;height:360px;display:block"></video>
@@ -48,11 +48,11 @@ const MEETING = `<!doctype html><meta charset="utf-8"><title>Fake meeting</title
   };
 </script>`;
 
-const SHOWS = 0.5;  // % of pixels changed that counts as "the effect is on screen"
+const SHOWS = 0.5;  // if more than this % of the picture changes, the effect is showing
 
 async function open(photo) {
   const context = await chromium.launchPersistentContext(join(work, `profile-${photo}-${Date.now()}`), {
-    channel: "chromium",  // the full browser: the headless shell can't load extensions
+    channel: "chromium",  // the full browser, because the lighter one can't load extensions
     args: [
       `--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`,
       "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
@@ -88,7 +88,7 @@ const check = (ok, what) => {
   if (!ok) failed++;
 };
 
-// 1. A fist isn't a gesture: the picture should stay the plain camera.
+// 1. A fist isn't a gesture, so the picture shouldn't change.
 {
   const { context, page, logs, label } = await open("fist");
   check(label.length > 0, `the meeting sees the camera's own name ("${label}")`);
@@ -97,16 +97,16 @@ const check = (ok, what) => {
   check(change < 0.2, `fist: nothing fires (${change.toFixed(1)}% of pixels changed)`);
   const errors = logs.filter((l) => l.startsWith("error"));
   check(errors.length === 0, `no errors in the console${errors.length ? ": " + errors.join(" | ") : ""}`);
-  // MediaPipe's routine startup chatter would show up under the extension's "Errors" button.
+  // MediaPipe's normal startup messages would show up under the Errors button.
   const chatter = logs.filter((l) => /gl_context|NORM_RECT|INFO:/.test(l));
   check(chatter.length === 0, `no MediaPipe startup warnings${chatter.length ? ": " + chatter.join(" | ") : ""}`);
   await context.close();
 }
 
-// 2. Thumbs up fires confetti; 3. an open palm turns on privacy mode; a peace sign brings in the fog.
+// 2. Thumbs up gives confetti, 3. open palm gives privacy, and a peace sign gives fog.
 for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privacy blur"], ["victory", "fog mirror"]]) {
   const { context, page, logs } = await open(photo);
-  // The gesture may already have fired while the model warmed up, so compare with the photo itself.
+  // Take a snapshot to compare against before the gesture fires.
   await page.evaluate(() => window.snapshot());
   const change = await watch(page, 10000);
   await page.screenshot({ path: join(OUT, `${photo}.png`) });
@@ -115,7 +115,7 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
   await context.close();
 }
 
-// 4. The Try buttons, including the finger gun and the Rasengan (no photos show those poses).
+// 4. The Try buttons, including finger gun and Rasengan (there are no photos of those).
 {
   const { context, page } = await open("fist");
   for (const key of ["bang", "confetti", "orb", "privacy"]) {
@@ -127,7 +127,7 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
     if (key !== "privacy") await page.waitForTimeout(3500);  // let it finish before the next one
   }
 
-  // 5. The fog mirror: Try turns it on, then draw "HI" with the pen and rub part of it out.
+  // 5. Fog mirror: turn it on, write "HI", then erase the I.
   await page.locator('gesture-cam-panel .effect[data-key="privacy"] .try').click();  // privacy off first
   await page.waitForTimeout(500);
   await page.locator('gesture-cam-panel .effect[data-key="fog"] .try').click();
@@ -141,7 +141,7 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
         await new Promise((r) => setTimeout(r, 40));
       }
       fx.run({ name: "fogPen", mode: null });
-      await new Promise((r) => setTimeout(r, 400));  // longer than the pen gap: next touch is a new stroke
+      await new Promise((r) => setTimeout(r, 400));  // wait so the next line starts fresh
     };
     const line = (x0, y0, x1, y1, n = 12) => Array.from({ length: n + 1 }, (_, i) => [x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n]);
     await stroke("draw", line(0.35, 0.3, 0.35, 0.7));  // H
@@ -168,10 +168,10 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
   await page.locator('gesture-cam-panel .effect[data-key="fog"] .try').click();  // fog off
   await page.waitForTimeout(1200);
 
-  // 6. Bad connection: lags, freezes, then goes black; clicking again "reconnects".
+  // 6. Bad connection: lags, freezes, then goes black. Clicking again brings it back.
   await page.evaluate(() => window.snapshot());
   await page.locator('gesture-cam-panel .effect[data-key="lag"] .try').click();
-  await page.waitForTimeout(12500);  // past the lagging (5 s) and frozen (6 s) stages
+  await page.waitForTimeout(12500);  // wait past the lagging (5 s) and frozen (6 s) parts
   const dead = await page.evaluate(() => window.changed());
   await page.screenshot({ path: join(OUT, "lag-dead.png") });
   check(dead > 50, `bad connection: the camera "dies" after the lag and freeze (${dead.toFixed(0)}% of pixels changed)`);
@@ -180,7 +180,7 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
   const back = await page.evaluate(() => window.changed());
   check(back < 0.5, `bad connection: turning it off brings the live picture back (${back.toFixed(1)}% of pixels changed)`);
 
-  // The camera should turn off only once every copy of the meeting's track has been stopped.
+  // The camera should only turn off once every copy of the video has been stopped.
   const afterOriginal = await page.evaluate(async () => {
     const track = window.stream.getVideoTracks()[0];
     const copy = track.clone();
