@@ -166,6 +166,18 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
   await page.locator('gesture-cam-panel .effect[data-key="fog"] .try').click();  // fog off
   await page.waitForTimeout(1200);
 
+  // 6. Bad connection: lags, freezes, then goes black; clicking again "reconnects".
+  await page.evaluate(() => window.snapshot());
+  await page.locator('gesture-cam-panel .effect[data-key="lag"] .try').click();
+  await page.waitForTimeout(12500);  // past the lagging (5 s) and frozen (6 s) stages
+  const dead = await page.evaluate(() => window.changed());
+  await page.screenshot({ path: join(OUT, "lag-dead.png") });
+  check(dead > 50, `bad connection: the camera "dies" after the lag and freeze (${dead.toFixed(0)}% of pixels changed)`);
+  await page.locator('gesture-cam-panel .effect[data-key="lag"] .try').click();
+  await page.waitForTimeout(1500);
+  const back = await page.evaluate(() => window.changed());
+  check(back < 0.5, `bad connection: turning it off brings the live picture back (${back.toFixed(1)}% of pixels changed)`);
+
   // The camera should turn off only once every copy of the meeting's track has been stopped.
   const afterOriginal = await page.evaluate(async () => {
     const track = window.stream.getVideoTracks()[0];

@@ -6,7 +6,7 @@
 // Opened by test/photos.mjs; also handy to open by hand while tuning thresholds.
 import factory from "../extension/vendor/mediapipe/vision_wasm_module_internal.js";
 import { HandLandmarker } from "../extension/vendor/mediapipe/vision_bundle.mjs";
-import { classify, measure } from "../extension/content/gestures.js";
+import { bothHandsUp, classify, measure } from "../extension/content/gestures.js";
 
 const PHOTOS = ["thumb_up", "pointing_up", "pointing_up_rotated", "victory", "fist", "right_hands"];
 
@@ -72,6 +72,16 @@ const variants = {
 for (const [name, [photo, lm]] of Object.entries(variants)) {
   results[name] = [{ gesture: classify(lm, W[photo], H[photo])?.name ?? null, palmFacingY: +measure(lm, W[photo], H[photo]).palmFacing[1].toFixed(2) }];
 }
+// Two-hand gestures look at all the hands together.
+const shift = (lm, dx) => lm.map((q) => ({ ...q, x: q.x + dx }));
+const bothPhoto = new Image(); bothPhoto.src = "images/right_hands.jpg"; await bothPhoto.decode();
+const pair = (hands) => [{ gesture: bothHandsUp(hands, W.right_hands, H.right_hands)?.name ?? null }];
+const fistPhoto = new Image(); fistPhoto.src = "images/fist.jpg"; await fistPhoto.decode();
+const fist = hands.detect(fistPhoto).landmarks[0];
+results["both hands: real photo, one upside down"] = pair(hands.detect(bothPhoto).landmarks);
+results["both hands: two open hands up"] = pair([palm, shift(palm, -0.3)]);
+results["both hands: one open hand up"] = pair([palm]);
+results["both hands: open hand + fist"] = pair([palm, fist]);
 window.results = results;
 document.body.textContent = JSON.stringify(results, null, 1);
 </script>

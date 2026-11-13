@@ -16,6 +16,11 @@ const EXPECT = {
   "open hand tilted flat the other way": ["flatHand"],
   "open hand turned sideways": [null],
   "middle finger instead of index": ["middlePoint"],
+  // Two-hand gestures: these check the pair, not each hand.
+  "both hands: real photo, one upside down": [null],
+  "both hands: two open hands up": ["bothHandsUp"],
+  "both hands: one open hand up": [null],
+  "both hands: open hand + fist": [null],
 };
 
 const server = await serve();

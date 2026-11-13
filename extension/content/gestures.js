@@ -1,6 +1,6 @@
 // Turns MediaPipe's 21 hand points into gestures: thumbs up, open palm, finger gun, peace sign,
-// a hand laid flat (the Rasengan), and pointing with just the index or just the middle finger
-// (the fog mirror's pen and eraser).
+// a hand laid flat (the Rasengan), pointing with just the index or just the middle finger
+// (the fog mirror's pen and eraser), and both hands up (the fake bad connection).
 //
 // Hand points (https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker):
 //   0 wrist; thumb 1-4; index 5-8; middle 9-12; ring 13-16; pinky 17-20 (knuckle first, tip last).
@@ -105,6 +105,19 @@ export function classify(landmarks, w, h) {
   }
 
   return null;
+}
+
+/**
+ * Both hands held up with fingers open: the bad-connection toggle. Unlike classify(), this looks at
+ * every hand in the picture at once. Returns { name: "bothHandsUp", ... } or null.
+ */
+export function bothHandsUp(hands, w, h) {
+  const raised = hands.filter((landmarks) => {
+    const m = measure(landmarks, w, h);
+    const open = Object.values(m.fingers).filter((f) => !f.curled).length;
+    return m.handDir[1] < -0.6 && open >= 3;  // pointing up, at least three fingers open
+  });
+  return raised.length >= 2 ? { name: "bothHandsUp", x: 0.5, y: 0.5, dx: 0, dy: -1 } : null;
 }
 
 /**

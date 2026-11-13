@@ -1,5 +1,6 @@
 // The effects engine. It draws on top of each camera frame with a plain 2D canvas: confetti, the
-// privacy blur, the finger-gun bang, the fog mirror you can draw on, and the Rasengan.
+// privacy blur, the finger-gun bang, the fog mirror you can draw on, the Rasengan, and a fake
+// bad connection.
 //
 // This file runs in the meeting page's own JavaScript world (see manifest.json), next to
 // page/camera.js, because that is where the camera frames are. The hand tracking runs in the
@@ -480,6 +481,95 @@
     ctx.restore();
   }
 
+  // ------------------------------------------------------------------ bad connection
+  //
+  // Makes your video look like your internet is dying, in stages:
+  //   1. Lagging: choppy and blocky. A new picture only "gets through" every so often (more rarely
+  //      as it goes on), often at low quality, and sometimes only in patches, leaving the rest stale.
+  //   2. Frozen: stuck on the last picture that got through.
+  //   3. Dead: black, as if the camera dropped out.
+  // Turning it off "reconnects": a moment of blockiness, then the live picture.
+
+  const LAG_SECONDS = 5;       // how long the choppy stage lasts
+  const FREEZE_SECONDS = 6;    // then how long it stays frozen before going black
+  const RECOVER_SECONDS = 0.6; // blocky moment when it comes back
+  const MACROBLOCK = 32;       // patch size for partial updates, in pixels (like real video blocks)
+
+  const lag = { on: false, at: -1e9, offAt: -1e9, holdUntil: 0 };
+  const held = { canvas: null, ctx: null, ready: false };  // the picture viewers are stuck on
+  const lowRes = { canvas: null, ctx: null };
+
+  function setLag(on) {
+    if (on === lag.on) return;
+    lag.on = on;
+    if (on) {
+      lag.at = clock();
+      held.ready = false;
+    } else {
+      lag.offAt = clock();
+    }
+  }
+
+  /** "lag", "freeze", "dead", "recover", or null when the connection is fine. */
+  function lagStage(t) {
+    if (!lag.on) return t - lag.offAt < RECOVER_SECONDS ? "recover" : null;
+    const age = t - lag.at;
+    return age < LAG_SECONDS ? "lag" : age < LAG_SECONDS + FREEZE_SECONDS ? "freeze" : "dead";
+  }
+
+  /** Draws `frame` at low quality: shrink it, then blow it back up without smoothing. */
+  function drawBlocky(ctx, frame, w, h, block) {
+    if (block <= 1.5) {
+      ctx.drawImage(frame, 0, 0, w, h);
+      return;
+    }
+    const sw = Math.max(1, Math.round(w / block)), sh = Math.max(1, Math.round(h / block));
+    context(lowRes, sw, sh).drawImage(frame, 0, 0, sw, sh);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(lowRes.canvas, 0, 0, sw, sh, 0, 0, w, h);
+    ctx.imageSmoothingEnabled = true;
+  }
+
+  /** Draws the bad-connection picture for this moment onto ctx. */
+  function drawLag(ctx, frame, stage, t, w, h) {
+    if (stage === "dead") {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, w, h);
+      return;
+    }
+    if (stage === "recover") {
+      const k = (t - lag.offAt) / RECOVER_SECONDS;
+      drawBlocky(ctx, frame, w, h, 1 + (1 - k) * 24);
+      return;
+    }
+
+    if (!held.canvas || held.canvas.width !== w || held.canvas.height !== h) held.ready = false;
+    const hc = context(held, w, h);
+    if (!held.ready || (stage === "lag" && t >= lag.holdUntil)) {
+      // A new picture gets through.
+      const age = t - lag.at;
+      const block = Math.random() < 0.6 ? rand(6, 10 + 4 * age) : 1;  // often low quality, worse over time
+      if (held.ready && Math.random() < 0.4) {
+        // Only some patches update; the rest stays stale, which looks smeared.
+        hc.save();
+        hc.beginPath();
+        for (let i = 0; i < 4; i++) {
+          const bw = MACROBLOCK * Math.round(rand(3, 12)), bh = MACROBLOCK * Math.round(rand(2, 6));
+          const bx = MACROBLOCK * Math.floor(rand(0, w / MACROBLOCK)), by = MACROBLOCK * Math.floor(rand(0, h / MACROBLOCK));
+          hc.rect(bx, by, bw, bh);
+        }
+        hc.clip();
+        drawBlocky(hc, frame, w, h, block);
+        hc.restore();
+      } else {
+        drawBlocky(hc, frame, w, h, block);
+      }
+      held.ready = true;
+      lag.holdUntil = t + rand(0.1, 0.25 + 0.12 * age);  // choppier as it goes on
+    }
+    ctx.drawImage(held.canvas, 0, 0);
+  }
+
   // ------------------------------------------------------------------ every frame
 
   /**
@@ -494,11 +584,19 @@
     const shaking = shakeAge < SHAKE_SECONDS;
     const fogged = fogAmount(t);
     const orbShown = orbAmount(t);
-    const busy = privacy > 0.001 || fogged > 0.001 || orbShown > 0 || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
+    const stage = lagStage(t);
+    const busy = stage || privacy > 0.001 || fogged > 0.001 || orbShown > 0 || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
     if (!busy) return frame;
 
     const w = frame.displayWidth, h = frame.displayHeight;
     const ctx = context(main, w, h);
+
+    // A "bad connection" hides every other effect: confetti flying over a frozen picture would
+    // give the game away. (The others keep running underneath and reappear when it's over.)
+    if (stage) {
+      drawLag(ctx, frame, stage, t, w, h);
+      return new VideoFrame(main.canvas, { timestamp: frame.timestamp, duration: frame.duration ?? undefined, alpha: "discard" });
+    }
 
     // Screen shake: offset the picture, zoomed in slightly so the edges never show.
     let rect = [0, 0, w, h];
@@ -544,7 +642,7 @@
     });
   }
 
-  /** A command from the extension: { name: "confetti" | "bang" | "privacy" | "fog" | "fogPen" | "orb", ... }. */
+  /** A command from the extension: { name: "confetti" | "bang" | "privacy" | "fog" | "fogPen" | "orb" | "lag", ... }. */
   function run(cmd) {
     if (cmd.name === "confetti") confetti(cmd.x, cmd.y);
     else if (cmd.name === "bang") bang(cmd.x, cmd.y, cmd.dx, cmd.dy);
@@ -552,6 +650,7 @@
     else if (cmd.name === "fog") setFog(!!cmd.on);
     else if (cmd.name === "fogPen") fogPen(cmd.mode, cmd.x, cmd.y);
     else if (cmd.name === "orb") orbUpdate(cmd.x, cmd.y, cmd.size, cmd.hold);
+    else if (cmd.name === "lag") setLag(!!cmd.on);
   }
 
   app.fx = { render, run };

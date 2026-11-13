@@ -5,7 +5,7 @@
 // commands back for page/fx.js to draw. Two effects follow your hand continuously instead of
 // firing once: the fog mirror's pen (index finger draws, middle finger erases) and the Rasengan,
 // which hovers over a hand laid flat.
-import { classify, Latch } from "./gestures.js";
+import { bothHandsUp, classify, Latch } from "./gestures.js";
 import { EFFECTS, Panel } from "./panel.js";
 import { OneEuroFilter } from "./smoothing.js";
 import { loadHandTracker } from "./tracker.js";
@@ -13,7 +13,7 @@ import { loadHandTracker } from "./tracker.js";
 const url = (path) => chrome.runtime.getURL(path);
 const MIN_FRAME_GAP_MS = 33;  // look for hands at most ~30 times a second
 
-const settings = await chrome.storage.local.get({ confetti: true, privacy: true, bang: true, fog: true, orb: true, folded: false });
+const settings = await chrome.storage.local.get({ confetti: true, privacy: true, bang: true, fog: true, orb: true, lag: true, folded: false });
 
 // How long each gesture must be held to fire, and how long it must be gone before it can fire again.
 // (The flat hand has no latch: the Rasengan stays for as long as you hold the pose.)
@@ -22,10 +22,11 @@ const latches = {
   openPalm: new Latch(0.6, 0.5),
   fingerGun: new Latch(0.25, 0.35),
   peace: new Latch(0.5, 0.5),
+  bothHandsUp: new Latch(0.5, 0.6),
 };
 
 let port = null, panel = null, tracker = null, loading = null;
-let privacyOn = false, fogOn = false;
+let privacyOn = false, fogOn = false, lagOn = false;
 
 // ------------------------------------------------------------------ link to the page
 
@@ -56,6 +57,7 @@ function start() {
       chrome.storage.local.set({ [key]: value });
       if (key === "privacy" && !value) setPrivacy(false);
       if (key === "fog" && !value) setFog(false);
+      if (key === "lag" && !value) setLag(false);
     },
     tryEffect: (key) => fire(key, null),
     fold: (folded) => chrome.storage.local.set({ folded }),
@@ -90,6 +92,12 @@ function onFrame(bitmap) {
     const g = classify(landmarks, width, height);
     if (g) seen.set(g.name, g);
   }
+  // Two hands up is its own gesture, and then the open palms in it shouldn't toggle privacy.
+  const both = bothHandsUp(hands, width, height);
+  if (both) {
+    seen.set(both.name, both);
+    seen.delete("openPalm");
+  }
   const t = performance.now() / 1000;
   for (const effect of EFFECTS) {
     const latch = latches[effect.gesture];
@@ -115,6 +123,7 @@ function fire(key, where) {
   else if (key === "bang") send({ name: "bang", x: where?.x ?? 0.3, y: where?.y ?? 0.6, dx: where?.dx ?? 1, dy: where?.dy ?? -0.25 });
   else if (key === "privacy") setPrivacy(!privacyOn);
   else if (key === "fog") setFog(!fogOn);
+  else if (key === "lag") setLag(!lagOn);
   else if (key === "orb") send({ name: "orb", x: 0.5, y: 0.45, size: 0.22, hold: 3 });
 }
 
@@ -122,6 +131,15 @@ function setPrivacy(on) {
   privacyOn = on;
   send({ name: "privacy", on });
   panel?.showOn("privacy", on);
+}
+
+// ------------------------------------------------------------------ bad connection
+
+function setLag(on) {
+  lagOn = on;
+  send({ name: "lag", on });
+  panel?.showOn("lag", on);
+  panel?.showStatus(on ? "Bad connection on. Both hands up again to reconnect." : undefined);
 }
 
 // ------------------------------------------------------------------ fog mirror

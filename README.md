@@ -9,6 +9,7 @@ Hand-gesture effects for your webcam in browser video calls. Everyone else in th
 | 👉 Finger gun (index out, thumb up) | Muzzle flash, "BANG!", screen shake and smoke |
 | ✌️ Peace sign | **Fog mirror**: the picture steams up like a bathroom mirror. Do it again to clear it. |
 | 🤚 Hand laid flat (palm up or down) | **Rasengan**: a spinning ball of wind and light hovers above your hand for as long as you hold it |
+| 🙌 Both hands up | **Bad connection**: your video lags and turns blocky (5 s), freezes (6 s), then goes black like the camera died. Both hands up again to "reconnect". |
 
 While the fog mirror is on, you can write on it:
 
