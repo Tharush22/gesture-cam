@@ -95,9 +95,11 @@ const check = (ok, what) => {
   await page.evaluate(() => window.snapshot());
   const change = await watch(page, 4000);
   check(change < 0.2, `fist: nothing fires (${change.toFixed(1)}% of pixels changed)`);
-  // MediaPipe prints its info messages through console.error, so skip those.
-  const errors = logs.filter((l) => l.startsWith("error") && !l.includes("INFO:"));
+  const errors = logs.filter((l) => l.startsWith("error"));
   check(errors.length === 0, `no errors in the console${errors.length ? ": " + errors.join(" | ") : ""}`);
+  // MediaPipe's routine startup chatter would show up under the extension's "Errors" button.
+  const chatter = logs.filter((l) => /gl_context|NORM_RECT|INFO:/.test(l));
+  check(chatter.length === 0, `no MediaPipe startup warnings${chatter.length ? ": " + chatter.join(" | ") : ""}`);
   await context.close();
 }
 

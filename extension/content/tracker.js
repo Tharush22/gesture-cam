@@ -12,12 +12,25 @@ export async function loadHandTracker(url) {
   const { HandLandmarker } = await import(url("vendor/mediapipe/vision_bundle.mjs"));
   const files = { wasmLoaderPath: "", wasmBinaryPath: url("vendor/mediapipe/vision_wasm_module_internal.wasm") };
 
+  // MediaPipe prints routine status lines as warnings and errors, for example
+  // "W1112 06:36:07 gl_context.cc] OpenGL error checking is disabled" or
+  // "INFO: Created TensorFlow Lite XNNPACK delegate for CPU". Chrome lists those under the
+  // extension's red "Errors" button, which looks alarming, so drop them. Lines starting with I or W
+  // are info and warnings; real problems (E..., or anything else) still get through.
+  const routine = /^\s*(?:[IW]\d{4} |INFO:)/;
+  const quiet = (log) => (...args) => {
+    if (!routine.test(String(args[0]))) log(...args);
+  };
+  globalThis.custom_dbg = quiet(console.warn);  // MediaPipe's own logger (it set a noisy one on import)
+  const factory = (moduleArg = {}) =>
+    moduleFactory(Object.assign(moduleArg, { print: quiet(console.log), printErr: quiet(console.error) }));
+
   // A software-emulated GPU is several times slower than the CPU path, so skip it.
   const delegates = softwareGpu() ? ["CPU"] : ["GPU", "CPU"];
   let landmarker = null;
   for (const delegate of delegates) {
     try {
-      globalThis.ModuleFactory = moduleFactory;  // MediaPipe clears this after each load
+      globalThis.ModuleFactory = factory;  // MediaPipe clears this after each load
       landmarker = await HandLandmarker.createFromOptions(files, {
         baseOptions: { modelAssetPath: url("models/hand_landmarker.task"), delegate },
         runningMode: "VIDEO",
