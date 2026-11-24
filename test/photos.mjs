@@ -12,8 +12,8 @@ const EXPECT = {
   fist: [null],
   right_hands: ["openPalm", null],
   // Real hands turned or changed in 3D, for poses I don't have photos of (see photos.html).
-  "open hand tilted flat": ["flatHand"],
-  "open hand tilted flat the other way": ["flatHand"],
+  "open hand tilted flat, palm up": ["flatHand"],
+  "open hand tilted flat, palm down": [null],      // only palm up makes a Rasengan, and it's not an open palm either
   "open hand turned sideways": [null],
   "middle finger instead of index": ["middlePoint"],
   // Two-hand gestures check both hands together.

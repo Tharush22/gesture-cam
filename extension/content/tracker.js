@@ -1,7 +1,8 @@
 // Loads the MediaPipe hand tracker from the files inside the extension.
 
 /**
- * Returns { detect(image) } once the model has loaded. detect() gives back the hand points.
+ * Returns { detect(image) } once the model has loaded. detect() gives back each hand's points
+ * and which hand it is ("Left" or "Right").
  * `url` turns a file path in the extension into a full link.
  */
 export async function loadHandTracker(url) {
@@ -56,7 +57,8 @@ export async function loadHandTracker(url) {
     detect(image) {
       // Each frame needs a later timestamp than the one before.
       lastTimestamp = Math.max(lastTimestamp + 1, Math.round(performance.now()));
-      return landmarker.detectForVideo(image, lastTimestamp).landmarks;
+      const result = landmarker.detectForVideo(image, lastTimestamp);
+      return result.landmarks.map((landmarks, i) => ({ landmarks, hand: result.handedness[i]?.[0]?.categoryName }));
     },
   };
 }

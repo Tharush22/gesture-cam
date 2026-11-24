@@ -186,6 +186,49 @@ for (const [photo, effect] of [["thumb_up", "confetti"], ["right_hands", "privac
   const back = await page.evaluate(() => window.changed());
   check(back < 0.5, `bad connection: turning it off brings the live picture back (${back.toFixed(1)}% of pixels changed)`);
 
+  // 7. Rasengan juggling, with made-up palm positions sent straight to fx.js.
+  const juggle = await page.evaluate(async () => {
+    const fx = globalThis[Symbol.for("gesture-cam")].fx;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Send hand positions every 50 ms for `ms` milliseconds. `where(t)` gives the palms at time t.
+    const hold = async (ms, where) => {
+      for (let t = 0; t < ms; t += 50) {
+        fx.run({ name: "palms", hands: where(t) });
+        await wait(50);
+      }
+    };
+    const out = {};
+    // One hand: hold it, flick it up, then keep it there to catch the Rasengan.
+    await hold(600, () => [{ x: 0.5, y: 0.6, size: 0.2 }]);
+    out.held = fx.peek().orbs.join();
+    await hold(150, (t) => [{ x: 0.5, y: 0.6 - (t / 150) * 0.3, size: 0.2 }]);  // flick up fast
+    out.thrown = fx.peek().orbs.join();
+    await hold(2500, () => [{ x: 0.5, y: 0.6, size: 0.2 }]);
+    out.oneHandJuggles = fx.peek().juggles;
+    // Take the hand away: it should fall and pop.
+    fx.run({ name: "palms", hands: [] });
+    await wait(2500);
+    out.afterMiss = fx.peek().orbs.length;
+    // Two hands: one Rasengan on each, throw one, and it should go back and forth.
+    const two = (t, flickLeft) => [
+      { x: 0.3, y: flickLeft ? 0.6 - (t / 150) * 0.3 : 0.6, size: 0.2 },
+      { x: 0.7, y: 0.6, size: 0.2 },
+    ];
+    await hold(600, (t) => two(t, false));
+    out.twoHeld = fx.peek().orbs.join();
+    await hold(150, (t) => two(t, true));
+    await hold(3500, (t) => two(t, false));
+    out.twoHandJuggles = fx.peek().juggles;
+    fx.run({ name: "orbClear" });
+    return out;
+  });
+  check(juggle.held === "held", `Rasengan appears on a palm held up (${juggle.held})`);
+  check(juggle.thrown === "air", `flicking the hand up throws it (${juggle.thrown})`);
+  check(juggle.oneHandJuggles >= 1, `catching it bounces it back up (${juggle.oneHandJuggles} juggles)`);
+  check(juggle.afterMiss === 0, `missing it makes it pop and disappear (${juggle.afterMiss} left)`);
+  check(juggle.twoHeld === "held,held", `two palms up give one Rasengan each (${juggle.twoHeld})`);
+  check(juggle.twoHandJuggles >= 2, `it goes back and forth between two hands (${juggle.twoHandJuggles} juggles)`);
+
   // The camera should only turn off once every copy of the video has been stopped.
   const afterOriginal = await page.evaluate(async () => {
     const track = window.stream.getVideoTracks()[0];

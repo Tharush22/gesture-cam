@@ -2,7 +2,7 @@
 //
 // camera.js sends small copies of the camera frames here. I find the hands, work out the gestures,
 // and send commands back to fx.js to draw the effects.
-// Two effects follow your hand the whole time instead of firing once: the fog pen and the Rasengan.
+// Two effects follow your hand the whole time instead of firing once: the fog pen and the Rasengans.
 import { bothHandsUp, classify, Latch } from "./gestures.js";
 import { EFFECTS, Panel } from "./panel.js";
 import { OneEuroFilter } from "./smoothing.js";
@@ -56,6 +56,7 @@ function start() {
       if (key === "privacy" && !value) setPrivacy(false);
       if (key === "fog" && !value) setFog(false);
       if (key === "lag" && !value) setLag(false);
+      if (key === "orb" && !value) send({ name: "orbClear" });
     },
     tryEffect: (key) => fire(key, null),
     fold: (folded) => chrome.storage.local.set({ folded }),
@@ -86,12 +87,16 @@ function onFrame(bitmap) {
   bitmap.close();
 
   const seen = new Map();
-  for (const landmarks of hands) {
-    const g = classify(landmarks, width, height);
-    if (g) seen.set(g.name, g);
+  const found = [];  // every hand's gesture (seen only keeps one per gesture)
+  for (const { landmarks, hand } of hands) {
+    const g = classify(landmarks, width, height, hand);
+    if (g) {
+      seen.set(g.name, g);
+      found.push(g);
+    }
   }
   // Two hands up is its own gesture, so the open palms shouldn't also turn on privacy.
-  const both = bothHandsUp(hands, width, height);
+  const both = bothHandsUp(hands.map((h) => h.landmarks), width, height);
   if (both) {
     seen.set(both.name, both);
     seen.delete("openPalm");
@@ -106,7 +111,7 @@ function onFrame(bitmap) {
   }
   panel?.showSeen(new Set(seen.keys()));
   if (fogOn) movePen(seen, t);
-  moveOrb(seen, t);
+  sendPalms(found);
 
   // Hand tracking and the video share the same thread, so wait at least as long as tracking took.
   // On a slow computer this keeps the video smooth, and gestures are just a bit slower.
@@ -122,7 +127,7 @@ function fire(key, where) {
   else if (key === "privacy") setPrivacy(!privacyOn);
   else if (key === "fog") setFog(!fogOn);
   else if (key === "lag") setLag(!lagOn);
-  else if (key === "orb") send({ name: "orb", x: 0.5, y: 0.45, size: 0.22, hold: 3 });
+  else if (key === "orb") send({ name: "orbTry" });
 }
 
 function setPrivacy(on) {
@@ -176,18 +181,12 @@ function movePen(seen, t) {
 
 // ------------------------------------------------------------------ Rasengan
 
-const ORB_HOLD = 0.25;   // hold your hand flat this long before the Rasengan shows up
-const ORB_GRACE = 0.3;   // short tracking misses don't restart the timer
-let orbSince = null, orbLastSeen = -Infinity;
+let palmsShown = false;
 
-/** Keeps the Rasengan above your flat hand. fx.js makes it fade out when the updates stop. */
-function moveOrb(seen, t) {
-  const hand = settings.orb ? seen.get("flatHand") : null;
-  if (!hand) {
-    if (t - orbLastSeen > ORB_GRACE) orbSince = null;
-    return;
-  }
-  orbLastSeen = t;
-  orbSince ??= t;
-  if (t - orbSince >= ORB_HOLD) send({ name: "orb", x: hand.x, y: hand.y, size: hand.size });
+/** Tells fx.js where your palm-up hands are. fx.js does the Rasengans and the juggling. */
+function sendPalms(found) {
+  const palms = settings.orb ? found.filter((g) => g.name === "flatHand").map(({ x, y, size }) => ({ x, y, size })) : [];
+  if (!palms.length && !palmsShown) return;  // no hands now or last time, nothing to say
+  palmsShown = palms.length > 0;
+  send({ name: "palms", hands: palms });
 }

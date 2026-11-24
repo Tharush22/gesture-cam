@@ -15,8 +15,11 @@ const dist = (a, b) => len(sub(a, b));
 const cosine = (a, b) => (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (len(a) * len(b) + 1e-9);
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
-/** Measures every finger. The tests use this too. */
-export function measure(landmarks, w, h) {
+/**
+ * Measures every finger. The tests use this too.
+ * `hand` is "Left" or "Right" from MediaPipe. It's needed to tell palm up from palm down.
+ */
+export function measure(landmarks, w, h, hand) {
   const p = landmarks.map((q) => [q.x * w, q.y * h, (q.z ?? 0) * w]);
   const palm = dist(p[0], p[9]) + 1e-9;  // wrist to middle knuckle, used as the hand's size
 
@@ -48,8 +51,12 @@ export function measure(landmarks, w, h) {
   // If the y part is close to 1 or -1, the hand is lying flat (palm up or down).
   const normal = cross(sub(p[5], p[0]), sub(p[17], p[0]));
   const palmFacing = normal.map((v) => v / (len(normal) + 1e-9));
+  // For a right hand that line comes out of the palm. For a left hand it comes out of the back,
+  // so flip it. (Checked on photos: backs of right hands point away from the camera.)
+  // A y below 0 means the palm faces up.
+  const palmDir = hand === "Right" ? palmFacing : hand === "Left" ? palmFacing.map((v) => -v) : null;
 
-  return { p, palm, fingers, thumbOut, thumbStraight, thumbGap, palmFacing,
+  return { p, palm, fingers, thumbOut, thumbStraight, thumbGap, palmFacing, palmDir,
     thumbDir: dir2(2, 4), handDir: dir2(0, 9), indexDir: dir2(5, 8) };
 }
 
@@ -57,13 +64,13 @@ export function measure(landmarks, w, h) {
  * Returns the gesture this hand is making, or null if it's none of them.
  * x, y is where the effect should start, and dx, dy is the direction it points.
  */
-export function classify(landmarks, w, h) {
-  const m = measure(landmarks, w, h);
+export function classify(landmarks, w, h, hand) {
+  const m = measure(landmarks, w, h, hand);
   const { index, middle, ring, pinky } = m.fingers;
   const at = (i) => ({ x: landmarks[i].x, y: landmarks[i].y });
 
-  // Flat hand (palm up or down) with fingers not curled. The Rasengan goes above the palm.
-  if (Math.abs(m.palmFacing[1]) > 0.65 && !index.curled && !middle.curled && !ring.curled && !pinky.curled) {
+  // Flat hand, palm facing up, fingers not curled. The Rasengan goes above the palm.
+  if (m.palmDir && m.palmDir[1] < -0.65 && !index.curled && !middle.curled && !ring.curled && !pinky.curled) {
     const palmIds = [0, 5, 9, 13, 17];
     const cx = palmIds.reduce((s, i) => s + landmarks[i].x, 0) / palmIds.length;
     const cy = palmIds.reduce((s, i) => s + landmarks[i].y, 0) / palmIds.length;
@@ -71,8 +78,9 @@ export function classify(landmarks, w, h) {
     return { name: "flatHand", x: cx, y: cy - size * 0.9, size, dx: 0, dy: -1 };
   }
 
-  // Open palm: all fingers and the thumb out, hand pointing up.
-  if (index.extended && middle.extended && ring.extended && pinky.extended && m.thumbOut && m.handDir[1] < -0.6) {
+  // Open palm: all fingers and the thumb out, hand pointing up and facing the camera (not lying flat).
+  const upright = Math.abs(m.palmFacing[1]) < 0.65;
+  if (index.extended && middle.extended && ring.extended && pinky.extended && m.thumbOut && m.handDir[1] < -0.6 && upright) {
     return { name: "openPalm", ...at(9), dx: 0, dy: -1 };
   }
 

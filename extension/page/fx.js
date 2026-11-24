@@ -1,5 +1,5 @@
 // Draws all the effects on top of each camera frame, using a 2D canvas:
-// confetti, privacy blur, bang, fog mirror, Rasengan and bad connection.
+// confetti, privacy blur, bang, fog mirror, Rasengan juggling and bad connection.
 //
 // This runs inside the meeting page next to camera.js, because that's where the camera frames are.
 // main.js does the hand tracking and sends commands here, like "confetti".
@@ -371,60 +371,141 @@
     ctx.drawImage(layer.canvas, 0, 0, w, h);
   }
 
-  // ------------------------------------------------------------------ Rasengan
+  // ------------------------------------------------------------------ Rasengan juggling
   //
-  // A spinning ball of light above your hand. It has a glowing middle, spinning streaks at
-  // different angles (so it looks round), a ring around the outside and sparks flying around it.
-  // Hand tracking updates less often than the video, so between updates the ball slides toward
-  // your hand to keep it smooth. When the updates stop, it shrinks away.
+  // Hold your palm up and a Rasengan appears on it. Flick your hand up to throw it. It falls back
+  // down, and if a palm-up hand is under it, it bounces back up. With two hands up you get one on
+  // each hand and can juggle them between your hands. If you miss, it pops at the bottom.
+  //
+  // main.js sends where your palm-up hands are a few times a second. Everything else happens here.
+  // x goes from 0 to 1 across the picture and y from 0 to 1 down. Speeds are per second.
 
-  const ORB_GROW = 0.35, ORB_SHRINK = 0.3;  // in seconds
-  const ORB_HOLD = 0.6;    // keep showing it this long after the last update
-  const ORB_FOLLOW = 14;   // how fast it follows your hand (higher = faster)
+  const ORB_HOLD = 0.25;       // hold your palm up this long before a Rasengan appears
+  const ORB_GROW = 0.35;       // how long it takes to grow in
+  const POP_SECONDS = 0.35;    // how long the pop lasts
+  const HAND_LOST = 0.35;      // forget a hand that hasn't been seen for this long
+  const GRAVITY = 2.2;         // how fast thrown Rasengans fall (lower = floatier, easier to juggle)
+  const TOSS_SPEED = 0.9;      // flick your hand up faster than this to throw
+  const BOUNCE_HEIGHT = 0.35;  // how high a juggled Rasengan goes (in picture heights)
+  const MAX_ORBS = 2;          // one per hand
 
-  const orb = { x: 0.5, y: 0.5, size: 0.2, target: null, shownAt: -1e9, until: -1e9, lastT: 0, arcs: null, sparks: null };
+  const palms = [];  // palm-up hands: { x, y, size, vx, vy, seenAt, since }
+  const orbs = [];   // { x, y, size, vx, vy, state: "held" | "air" | "pop", palm, bornAt, popAt, phase }
+  let juggles = 0, orbClock = 0;
+  const orbParts = { arcs: null, sparks: null };
 
-  function orbAmount(t) {
-    const grow = easeOut(clamp01((t - orb.shownAt) / ORB_GROW));
-    const shrink = 1 - clamp01((t - orb.until) / ORB_SHRINK);
-    return grow * shrink;
+  /** New hand positions from main.js. Works out how fast each hand is moving. */
+  function updatePalms(list) {
+    const t = clock();
+    const unmatched = new Set(palms);
+    for (const p of list) {
+      // Match it with the closest hand from last time.
+      let best = null, bestDist = 0.25;
+      for (const old of unmatched) {
+        const d = Math.hypot(old.x - p.x, old.y - p.y);
+        if (d < bestDist) [best, bestDist] = [old, d];
+      }
+      if (!best) {
+        palms.push({ ...p, vx: 0, vy: 0, seenAt: t, since: t });
+        continue;
+      }
+      unmatched.delete(best);
+      const dt = Math.max(0.01, t - best.seenAt);
+      const k = 0.6;  // smooth the speed a little
+      best.vx = best.vx * (1 - k) + ((p.x - best.x) / dt) * k;
+      best.vy = best.vy * (1 - k) + ((p.y - best.y) / dt) * k;
+      Object.assign(best, { x: p.x, y: p.y, size: p.size, seenAt: t });
+    }
   }
 
-  /** Where your hand is now (x, y) and how big it is. */
-  function orbUpdate(x, y, size, hold = ORB_HOLD) {
-    const t = clock();
-    if (orbAmount(t) <= 0) {  // just appearing, so start right at the hand
-      Object.assign(orb, { x, y, size, shownAt: t, lastT: t });
+  function throwOrb(o, p) {
+    o.state = "air";
+    o.vy = Math.min(-1.2, Math.max(-2.8, p.vy * 1.2));  // throw harder if you flick harder
+    o.vx = Math.min(0.6, Math.max(-0.6, p.vx * 0.6));
+  }
+
+  /** A palm caught a falling Rasengan: bounce it up, over to your other hand if there is one. */
+  function bounce(o, p) {
+    juggles++;
+    const speed = Math.sqrt(2 * GRAVITY * BOUNCE_HEIGHT);
+    const flight = (2 * speed) / GRAVITY;  // time until it comes back down to the same height
+    const other = palms.filter((q) => q !== p && Math.abs(q.x - p.x) > 0.15)[0];
+    o.y = p.y - 0.06;
+    o.vy = -speed;
+    o.vx = other ? (other.x - o.x) / flight : 0;
+  }
+
+  function pop(o, t) {
+    o.state = "pop";
+    o.popAt = t;
+  }
+
+  /** Moves everything forward to time t. */
+  function stepOrbs(t) {
+    const dt = Math.min(0.1, Math.max(0, t - orbClock));  // 0 when several streams draw at once
+    orbClock = t;
+    for (let i = palms.length - 1; i >= 0; i--) if (t - palms[i].seenAt > HAND_LOST) palms.splice(i, 1);
+
+    // A new Rasengan on a palm-up hand that doesn't have one, as long as none are flying.
+    if (!orbs.some((o) => o.state === "air")) {
+      for (const p of palms) {
+        if (orbs.length >= MAX_ORBS) break;
+        if (t - p.since >= ORB_HOLD && !orbs.some((o) => o.palm === p && o.state === "held")) {
+          orbs.push({ x: p.x, y: p.y, size: p.size, vx: 0, vy: 0, state: "held", palm: p, bornAt: t, phase: rand(0, 10) });
+        }
+      }
     }
-    orb.target = { x, y, size };
-    orb.until = t + hold;
+
+    for (const o of orbs) {
+      if (o.state === "held") {
+        const p = o.palm;
+        if (!palms.includes(p)) {
+          // The hand's gone. If it was moving up fast it was a throw (tracking often loses a fast
+          // flick), otherwise the Rasengan just fizzles out.
+          if (p.vy < -TOSS_SPEED * 0.6) throwOrb(o, p);
+          else pop(o, t);
+          continue;
+        }
+        const k = 1 - Math.exp(-14 * dt);  // slide to the hand smoothly
+        o.x += (p.x - o.x) * k;
+        o.y += (p.y - o.y) * k;
+        o.size += (p.size - o.size) * k;
+        if (p.vy < -TOSS_SPEED) throwOrb(o, p);
+      } else if (o.state === "air") {
+        o.vy += GRAVITY * dt;
+        o.x += o.vx * dt;
+        o.y += o.vy * dt;
+        if ((o.x < 0.05 && o.vx < 0) || (o.x > 0.95 && o.vx > 0)) o.vx = -o.vx;  // bounce off the sides
+        if (o.vy > 0) {
+          // Falling: is there a palm under it?
+          const p = palms.find((q) => Math.abs(o.x - q.x) < 0.1 + q.size * 0.5 && o.y > q.y - 0.08 && o.y < q.y + 0.2);
+          if (p) bounce(o, p);
+        }
+        if (o.y > 1.05) pop(o, t);
+      }
+    }
+    for (let i = orbs.length - 1; i >= 0; i--) if (orbs[i].state === "pop" && t - orbs[i].popAt > POP_SECONDS) orbs.splice(i, 1);
+    if (!orbs.length) juggles = 0;
+  }
+
+  /** The Try button: throw one up from the bottom. */
+  function orbTry() {
+    orbs.push({ x: 0.5, y: 0.9, size: 0.22, vx: 0, vy: -1.7, state: "air", palm: null, bornAt: clock(), phase: rand(0, 10) });
   }
 
   function makeOrbParts() {
-    orb.arcs = Array.from({ length: 16 }, () => ({
+    orbParts.arcs = Array.from({ length: 16 }, () => ({
       r: rand(0.35, 1), tilt: rand(0, Math.PI), squash: rand(0.25, 1), spin: rand(7, 15),
       start: rand(0, Math.PI * 2), len: rand(0.8, 2.2), width: rand(0.025, 0.07), alpha: rand(0.35, 0.85),
     }));
-    orb.sparks = Array.from({ length: 24 }, () => ({
+    orbParts.sparks = Array.from({ length: 24 }, () => ({
       r: rand(0.9, 1.5), speed: rand(3, 8), phase: rand(0, Math.PI * 2), tilt: rand(0, Math.PI), size: rand(0.02, 0.05),
     }));
   }
 
-  function drawOrb(ctx, amount, t, h) {
-    const w = ctx.canvas.width;
-    // Slide toward the hand.
-    const dt = Math.min(0.1, Math.max(0, t - orb.lastT));
-    orb.lastT = t;
-    if (orb.target) {
-      const k = 1 - Math.exp(-ORB_FOLLOW * dt);
-      orb.x += (orb.target.x - orb.x) * k;
-      orb.y += (orb.target.y - orb.y) * k;
-      orb.size += (orb.target.size - orb.size) * k;
-    }
-    if (!orb.arcs) makeOrbParts();
-
-    const cx = orb.x * w, cy = orb.y * h;
-    const R = orb.size * h * 0.55 * (0.3 + 0.7 * amount) * (1 + 0.03 * Math.sin(t * 37));  // small flicker
+  /** Draws one Rasengan: a glowing middle, spinning streaks, a ring and sparks. */
+  function drawOrbAt(ctx, cx, cy, R, amount, t) {
+    if (!orbParts.arcs) makeOrbParts();
     ctx.save();
     ctx.globalCompositeOperation = "lighter";  // overlapping light gets brighter
     ctx.globalAlpha = Math.min(1, amount * 1.2);
@@ -447,7 +528,7 @@
     ctx.fill();
 
     ctx.lineCap = "round";
-    for (const a of orb.arcs) {
+    for (const a of orbParts.arcs) {
       const from = a.start + a.spin * t;
       ctx.strokeStyle = `rgba(210,240,255,${a.alpha})`;
       ctx.lineWidth = a.width * R;
@@ -466,7 +547,7 @@
     }
 
     ctx.fillStyle = "rgba(220,245,255,0.9)";
-    for (const s of orb.sparks) {
+    for (const s of orbParts.sparks) {
       const angle = s.phase + s.speed * t;
       const ex = Math.cos(angle) * s.r * R, ey = Math.sin(angle) * s.r * R * 0.45;
       const x = cx + ex * Math.cos(s.tilt) - ey * Math.sin(s.tilt);
@@ -476,6 +557,44 @@
       ctx.fill();
     }
     ctx.restore();
+  }
+
+  function drawOrbs(ctx, t, w, h) {
+    for (const o of orbs) {
+      const cx = o.x * w, cy = Math.min(o.y, 1) * h;
+      const R = o.size * h * 0.55 * (1 + 0.03 * Math.sin(t * 37));  // small flicker
+      if (o.state === "pop") {
+        // Pop: a flash and a ring that spreads out and fades.
+        const k = (t - o.popAt) / POP_SECONDS;
+        drawOrbAt(ctx, cx, cy, R * (1 - k), 1 - k, t + o.phase);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.strokeStyle = `rgba(170,225,255,${0.8 * (1 - k)})`;
+        ctx.lineWidth = R * 0.15 * (1 - k);
+        ctx.beginPath();
+        ctx.arc(cx, cy, R * (1 + 1.5 * k), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        const grow = easeOut(clamp01((t - o.bornAt) / ORB_GROW));
+        drawOrbAt(ctx, cx, cy, R * (0.3 + 0.7 * grow), grow, t + o.phase);
+      }
+    }
+    if (juggles >= 1) {
+      // Juggle counter at the top.
+      const size = 0.06 * h;
+      ctx.save();
+      ctx.font = `900 ${size}px Impact, "Arial Black", system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = size * 0.14;
+      ctx.strokeStyle = "#0b2a5a";
+      ctx.strokeText(`Juggles: ${juggles}`, w / 2, 0.04 * h);
+      ctx.fillStyle = "#bfe6ff";
+      ctx.fillText(`Juggles: ${juggles}`, w / 2, 0.04 * h);
+      ctx.restore();
+    }
   }
 
   // ------------------------------------------------------------------ bad connection
@@ -580,9 +699,10 @@
     const shakeAge = t - state.shakeAt;
     const shaking = shakeAge < SHAKE_SECONDS;
     const fogged = fogAmount(t);
-    const orbShown = orbAmount(t);
+    stepOrbs(t);
+    const orbShown = orbs.length > 0;
     const stage = lagStage(t);
-    const busy = stage || privacy > 0.001 || fogged > 0.001 || orbShown > 0 || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
+    const busy = stage || privacy > 0.001 || fogged > 0.001 || orbShown || shaking || state.confetti.length || state.smoke.length || state.bangs.length;
     if (!busy) return frame;
 
     const w = frame.displayWidth, h = frame.displayHeight;
@@ -622,7 +742,7 @@
     if (fogged > 0.001) drawFog(ctx, fogged, t, w, h);
     drawSmoke(ctx, t, w, h);
     drawConfetti(ctx, t, w, h);
-    if (orbShown > 0) drawOrb(ctx, orbShown, t, h);
+    if (orbShown) drawOrbs(ctx, t, w, h);
     drawBangs(ctx, t, w, h);
 
     const flashAge = shakeAge;  // the white flash starts at the same time as the bang
@@ -646,9 +766,12 @@
     else if (cmd.name === "privacy") privacy(!!cmd.on);
     else if (cmd.name === "fog") setFog(!!cmd.on);
     else if (cmd.name === "fogPen") fogPen(cmd.mode, cmd.x, cmd.y);
-    else if (cmd.name === "orb") orbUpdate(cmd.x, cmd.y, cmd.size, cmd.hold);
+    else if (cmd.name === "palms") updatePalms(cmd.hands);
+    else if (cmd.name === "orbTry") orbTry();
+    else if (cmd.name === "orbClear") orbs.length = palms.length = 0;
     else if (cmd.name === "lag") setLag(!!cmd.on);
   }
 
-  app.fx = { render, run };
+  // peek() lets the tests check on the Rasengans.
+  app.fx = { render, run, peek: () => ({ orbs: orbs.map((o) => o.state), juggles }) };
 })();

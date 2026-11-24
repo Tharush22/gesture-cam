@@ -9,7 +9,8 @@ Chrome extension that adds effects to your webcam when you do hand gestures. Wor
 - 👉 **Finger gun**
 - ✌️ **Peace sign**: fog mirror (again to clear)
   - index finger draws, middle finger erases
-- 🤚 **Flat hand, palm up**: Rasengan
+- 🤚 **Palm up**: Rasengan
+  - flick your hand up to throw it, catch it to juggle. Use both hands to juggle two
 - 🙌 **Both hands up**: fake bad connection. Lags, freezes, then goes black. Again to come back.
 
 ## Install
